@@ -14,7 +14,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv(ROOT_DIR / ".env.local", override=True)
 
-checkpointer: AsyncRedisSaver | None = None  # pyright: ignore[reportUndefinedVariable]
+# checkpointer: AsyncRedisSaver | None = None  
 agent: Any | None = None
 
 qdrant_client: QdrantClient | None = QdrantClient(

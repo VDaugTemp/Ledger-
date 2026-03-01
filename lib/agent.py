@@ -8,6 +8,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_openai import OpenAIEmbeddings
 from langchain.agents import create_agent
 from langchain_qdrant import QdrantVectorStore
+from langgraph.checkpoint.redis import AsyncRedisSaver
 from qdrant_client import QdrantClient
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -15,7 +16,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv(ROOT_DIR / ".env.local", override=True)
 
-# checkpointer: AsyncRedisSaver | None = None  
+checkpointer: AsyncRedisSaver | None = None  
 agent: Any | None = None
 
 qdrant_client: QdrantClient | None = QdrantClient(
@@ -49,12 +50,24 @@ async def retrieve(query: str) -> str:
 async def get_agent():
     global agent
     if agent is None:
+        redis_url = os.getenv("REDIS_URL") or ""
+        if not redis_url.strip():
+            raise ValueError("REDIS_URL is not set. Set REDIS_URL in .env (e.g. redis://host:port)")
+        redis_url = redis_url.strip()
+        if not redis_url.startswith(("redis://", "rediss://", "unix://")):
+            redis_url = "redis://" + redis_url
+        checkpointer = AsyncRedisSaver(
+            redis_url=redis_url,
+            checkpoint_prefix="tax-agent-checkpointer",
+        )
+        await checkpointer.asetup()
         agent = create_agent(
             model=ChatAnthropic(
-                model_name="claude-3-5-haiku-20241022",
+                model_name="claude-haiku-4-5",
                 timeout=60,
                 stop=None,
             ),
+            checkpointer=checkpointer,
             system_prompt=SYSTEM_PROMPT,     
             tools=[retrieve],
         )

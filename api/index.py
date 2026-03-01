@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from typing import Any
 from lib.agent import get_agent
 import json
+import uuid
 
 
 load_dotenv()
@@ -30,11 +31,16 @@ async def health():
 @app.post("/app/chat")
 async def chat(payload: ChatRequest):
     agent = await get_agent()
+    config = payload.config or {}
+    configurable = config.get("configurable") or {}
+    if "thread_id" not in configurable:
+        configurable = {**configurable, "thread_id": str(uuid.uuid4())}
+    config = {**config, "configurable": configurable}
 
     async def stream():
         async for message, metadata in agent.astream(
             {"messages": [{"role": "user", "content": payload.input}]},
-            config=payload.config,
+            config=config,
             stream_mode="messages",
         ):
             yield (

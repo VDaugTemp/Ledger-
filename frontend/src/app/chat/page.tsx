@@ -1,6 +1,8 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
+import { useCallback, useMemo, useState } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -19,7 +21,9 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 import { motion, AnimatePresence } from "framer-motion";
-import { SparklesIcon, AlertCircleIcon } from "lucide-react";
+import { SparklesIcon, AlertCircleIcon, PlusIcon } from "lucide-react";
+
+const SESSION_KEY = "chatThreadId";
 
 const SUGGESTED_QUESTIONS = [
   "What are my tax obligations as a digital nomad?",
@@ -99,8 +103,35 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
-export default function ChatPage() {
-  const { messages, sendMessage, status, stop } = useChat();
+function getOrCreateThreadId(): string {
+  if (typeof window === "undefined") return crypto.randomUUID();
+  let id = sessionStorage.getItem(SESSION_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem(SESSION_KEY, id);
+  }
+  return id;
+}
+
+/** Call when user explicitly starts a new chat. Clears session and returns new thread id. */
+function resetThreadId(): string {
+  if (typeof window !== "undefined") {
+    sessionStorage.removeItem(SESSION_KEY);
+  }
+  const newId = crypto.randomUUID();
+  if (typeof window !== "undefined") {
+    sessionStorage.setItem(SESSION_KEY, newId);
+  }
+  return newId;
+}
+
+function ChatContent({ onNewChat }: { onNewChat: () => void }) {
+  const threadId = useMemo(() => getOrCreateThreadId(), []);
+  const transport = useMemo(
+    () => new DefaultChatTransport({ body: { threadId } }),
+    [threadId],
+  );
+  const { messages, sendMessage, status, stop } = useChat({ transport });
 
   const isLoading = status === "submitted" || status === "streaming";
   const isThinking = status === "submitted";
@@ -117,6 +148,18 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)]">
+      {/* Top bar: New chat (right) — resets thread and clears conversation */}
+      <div className="flex-shrink-0 border-b border-border/30 flex items-center justify-end px-4 py-2">
+        <button
+          type="button"
+          onClick={onNewChat}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-accent transition-colors"
+          aria-label="Start new chat"
+        >
+          <PlusIcon className="size-3.5" />
+          New chat
+        </button>
+      </div>
       {/* Status bar — only visible when active */}
       <AnimatePresence>
         {(isLoading || status === "error") && (
@@ -309,4 +352,14 @@ export default function ChatPage() {
       </div>
     </div>
   );
+}
+
+export default function ChatPage() {
+  const [threadId, setThreadId] = useState(() =>
+    typeof window !== "undefined" ? getOrCreateThreadId() : crypto.randomUUID(),
+  );
+  const handleNewChat = useCallback(() => {
+    setThreadId(resetThreadId());
+  }, []);
+  return <ChatContent key={threadId} onNewChat={handleNewChat} />;
 }

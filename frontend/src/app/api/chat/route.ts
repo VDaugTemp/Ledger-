@@ -17,19 +17,30 @@ const BACKEND_URL =
 type TextPart = { type: "text"; text: string };
 
 export async function POST(req: Request) {
-  const { messages }: { messages: UIMessage[] } = await req.json();
+  const body = await req.json();
+  const { messages, threadId } = body as {
+    messages?: UIMessage[];
+    threadId?: string;
+  };
 
-  const lastMsg = messages.at(-1);
+  const lastMsg = messages?.at(-1);
   const input =
     lastMsg?.parts
       ?.filter((p): p is TextPart => p.type === "text")
       .map((p) => p.text)
       .join("") ?? "";
 
+  const backendBody: { input: string; config?: { configurable: { thread_id: string } } } = {
+    input,
+  };
+  if (typeof threadId === "string" && threadId.trim()) {
+    backendBody.config = { configurable: { thread_id: threadId.trim() } };
+  }
+
   const backendRes = await fetch(`${BACKEND_URL}/app/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ input }),
+    body: JSON.stringify(backendBody),
   });
 
   if (!backendRes.ok || !backendRes.body) {

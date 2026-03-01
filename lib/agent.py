@@ -4,7 +4,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import OpenAIEmbeddings
 from langchain.agents import create_agent
 from langchain_qdrant import QdrantVectorStore
 from qdrant_client import QdrantClient
@@ -49,7 +50,11 @@ async def get_agent():
     global agent
     if agent is None:
         agent = create_agent(
-            model=ChatOpenAI(model="gpt-4o-mini"),
+            model=ChatAnthropic(
+                model_name="claude-3-5-haiku-20241022",
+                timeout=60,
+                stop=None,
+            ),
             system_prompt=SYSTEM_PROMPT,     
             tools=[retrieve],
         )

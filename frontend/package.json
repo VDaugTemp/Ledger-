@@ -9,7 +9,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^3.0.34",
     "@ai-sdk/react": "^3.0.103",
     "@streamdown/cjk": "^1.0.2",
     "@streamdown/code": "^1.0.3",

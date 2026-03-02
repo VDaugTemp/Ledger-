@@ -61,6 +61,18 @@ export default function RootLayout({
                   >
                     Chat
                   </Link>
+                  <Link
+                    href="/intake"
+                    className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-accent tracking-wide"
+                  >
+                    Intake
+                  </Link>
+                  <Link
+                    href="/profile"
+                    className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-accent tracking-wide"
+                  >
+                    Profile
+                  </Link>
                   <ThemeToggle />
                 </div>
               </nav>

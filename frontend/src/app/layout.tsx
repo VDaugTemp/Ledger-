@@ -27,7 +27,7 @@ export default function RootLayout({
       <body className="antialiased min-h-screen flex flex-col">
         <ThemeProvider>
           <TooltipProvider>
-            <header className="sticky top-0 z-50 border-b border-border/50 bg-background/90 backdrop-blur-md">
+            <header className="sticky top-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-xl">
               <nav className="max-w-4xl mx-auto px-5 h-14 flex items-center justify-between">
                 <Link
                   href="/"
@@ -48,7 +48,7 @@ export default function RootLayout({
                   </div>
                   <span
                     className="text-sm font-medium tracking-[0.06em] text-foreground/90 group-hover:text-foreground transition-colors"
-                    style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}
+                    style={{ fontFamily: "'DM Sans', sans-serif" }}
                   >
                     LEDGER
                   </span>

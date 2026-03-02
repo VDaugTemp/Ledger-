@@ -4,9 +4,9 @@ from typing import Any
 
 from dotenv import load_dotenv
 from langchain_core.tools import tool
-from langchain_anthropic import ChatAnthropic
-from langchain_openai import OpenAIEmbeddings
 from langchain.agents import create_agent
+
+from lib.model_provider import ModelProviderChatModel, ModelProviderEmbeddings
 from langchain_qdrant import QdrantVectorStore
 from langgraph.checkpoint.redis import AsyncRedisSaver
 from qdrant_client import QdrantClient
@@ -24,13 +24,15 @@ qdrant_client: QdrantClient | None = QdrantClient(
     api_key=os.getenv("QDRANT_API_KEY")
 )
 qdrant_collection = qdrant_client.get_collection("malaysia-tax-laws")
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+embeddings = ModelProviderEmbeddings(model="text-embedding-3-small")
 vector_store = QdrantVectorStore(
     client=qdrant_client,
     collection_name="malaysia-tax-laws",
     embedding=embeddings,
 )
-retriever = vector_store.as_retriever(search_kwargs={"k": 6})
+retriever = vector_store.as_retriever(search_kwargs={"k": 5})
+wide_retriever =  vector_store.as_retriever(search_kwargs={"k": 20})  
+# cohere_client = cohere.AsyncClientV2(api_key=(os.getenv("COHERE_API_KEY")))
 
 SYSTEM_PROMPT = "You are a helpful assistant that can answer questions and help with tasks."
 
@@ -62,10 +64,9 @@ async def get_agent():
         )
         await checkpointer.asetup()
         agent = create_agent(
-            model=ChatAnthropic(
-                model_name="claude-haiku-4-5",
+            model=ModelProviderChatModel(
+                model_name="claude-3-5-haiku-20241022",
                 timeout=60,
-                stop=None,
             ),
             checkpointer=checkpointer,
             system_prompt=SYSTEM_PROMPT,     

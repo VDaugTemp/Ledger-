@@ -2,8 +2,6 @@
   "pythonVersion": "3.11",
   "pythonPlatform": "Darwin",
   "pythonPath": "/usr/local/bin/python",
-  "include": [
-    "api",
-    "lib"
-  ]
+  "include": ["api", "lib"],
+  "extraPaths": ["frontend/notebooks"]
 }

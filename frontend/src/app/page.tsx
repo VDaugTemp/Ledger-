@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
 
 const capabilities = [
@@ -10,21 +10,34 @@ const capabilities = [
   { title: "Relief & deductions", detail: "optimised for you" },
 ];
 
+const spring = { type: "spring" as const, stiffness: 320, damping: 28 };
+const stagger = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: { staggerChildren: 0.08, delayChildren: 0.06 },
+  },
+};
+const fadeUpItem = {
+  hidden: { opacity: 0, y: 24 },
+  visible: { opacity: 1, y: 0, transition: spring },
+};
 const fadeUp = (delay = 0) => ({
   initial: { opacity: 0, y: 20 },
   animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.55, delay, ease: "easeOut" },
+  transition: { duration: 0.5, delay, ease: [0.22, 1, 0.36, 1] },
 } as const);
 
 export default function Home() {
+  const reduced = useReducedMotion();
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-6 relative overflow-hidden min-h-0">
-      {/* Ambient glow */}
+      {/* Ambient glow — primary (teal/cyan) tint */}
       <div
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[500px] rounded-full pointer-events-none"
         style={{
           background:
-            "radial-gradient(ellipse, oklch(0.80 0.148 75 / 0.06) 0%, transparent 70%)",
+            "radial-gradient(ellipse, oklch(0.72 0.10 195 / 0.08) 0%, transparent 70%)",
         }}
         aria-hidden
       />
@@ -35,7 +48,7 @@ export default function Home() {
           <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-border/60 bg-card/40 text-[11px] text-muted-foreground tracking-[0.12em] uppercase">
             <span
               className="size-1.5 rounded-full bg-primary/70 inline-block"
-              style={{ boxShadow: "0 0 6px oklch(0.80 0.148 75 / 0.5)" }}
+              style={{ boxShadow: "0 0 8px oklch(0.72 0.10 195 / 0.5)" }}
             />
             AI-Powered Accountancy
           </span>
@@ -63,31 +76,37 @@ export default function Home() {
 
         {/* CTA */}
         <motion.div {...fadeUp(0.24)}>
-          <Link
-            href="/chat"
-            className="inline-flex items-center gap-2.5 px-6 py-3 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90 active:scale-[0.98] transition-all duration-150 group"
-          >
-            Start a conversation
-            <ArrowRight className="size-4 transition-transform duration-200 group-hover:translate-x-0.5" />
-          </Link>
+          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} transition={spring}>
+            <Link
+              href="/chat"
+              className="inline-flex items-center gap-2.5 px-6 py-3 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:opacity-90 transition-opacity duration-150 group"
+            >
+              Start a conversation
+              <ArrowRight className="size-4 transition-transform duration-200 group-hover:translate-x-0.5" />
+            </Link>
+          </motion.div>
         </motion.div>
 
-        {/* Capability pills */}
+        {/* Capability pills — staggered */}
         <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.45, duration: 0.5 }}
+          variants={reduced ? undefined : stagger}
+          initial="hidden"
+          animate="visible"
           className="flex items-start justify-center gap-8 pt-2"
         >
           {capabilities.map((c) => (
-            <div key={c.title} className="text-center">
+            <motion.div
+              key={c.title}
+              variants={reduced ? undefined : fadeUpItem}
+              className="text-center"
+            >
               <div className="text-xs font-medium text-foreground/75 tracking-wide">
                 {c.title}
               </div>
               <div className="text-[11px] text-muted-foreground mt-0.5">
                 {c.detail}
               </div>
-            </div>
+            </motion.div>
           ))}
         </motion.div>
       </div>
@@ -96,8 +115,8 @@ export default function Home() {
       <motion.div
         initial={{ scaleX: 0, opacity: 0 }}
         animate={{ scaleX: 1, opacity: 1 }}
-        transition={{ delay: 0.6, duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-        className="absolute bottom-0 left-1/2 -translate-x-1/2 w-48 h-px bg-gradient-to-r from-transparent via-primary/30 to-transparent"
+        transition={{ delay: 0.55, duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+        className="absolute bottom-0 left-1/2 -translate-x-1/2 w-48 h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent"
         aria-hidden
       />
     </div>

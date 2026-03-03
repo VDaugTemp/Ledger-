@@ -24,7 +24,6 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { SparklesIcon, AlertCircleIcon, PlusIcon, XIcon } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 import { useUserProfile } from "@/hooks/useUserProfile";
-import { formatProfileContext } from "@/lib/profileContext";
 import { generateOpenQuestions, applyProfilePatch } from "@/lib/openQuestions";
 import type { Profile, OpenQuestion } from "@/lib/types";
 
@@ -284,9 +283,10 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
   // Mutable body ref — DefaultChatTransport stores this object reference;
   // mutations here are visible at send time without recreating the transport.
   const chatBodyRef = useRef<Record<string, unknown>>({ threadId });
-  const profileContext = formatProfileContext(profile, nextQuestion);
   chatBodyRef.current.threadId = threadId;
-  chatBodyRef.current.profileContext = profileContext || undefined;
+  chatBodyRef.current.profile = profile ?? undefined;
+  chatBodyRef.current.skippedFieldPaths = skippedFieldPaths;
+  chatBodyRef.current.todayIso = new Date().toISOString().split("T")[0];
   chatBodyRef.current.userId = userId || undefined;
 
   const transport = useMemo(

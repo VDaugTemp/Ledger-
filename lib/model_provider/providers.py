@@ -1,5 +1,6 @@
 """Provider implementations. Vendor SDKs (anthropic, openai) are imported only here."""
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -45,18 +46,23 @@ def _normalize_error(
 
 def _normalize_anthropic_error(e: Exception) -> ModelProviderError:
     resp = getattr(e, "response", None)
-    return _normalize_error(
-        e,
-        status_code=getattr(resp, "status_code", None),
-        body=getattr(resp, "text", None),
-    )
+    status_code = getattr(resp, "status_code", None)
+    try:
+        body = resp.text if resp is not None else None
+    except Exception:
+        body = None
+    return _normalize_error(e, status_code=status_code, body=body)
 
 
 def _normalize_openai_error(e: Exception) -> ModelProviderError:
     status_code = getattr(e, "status_code", None)
+    resp = getattr(e, "response", None)
     if status_code is None:
-        status_code = getattr(getattr(e, "response", None), "status_code", None)
-    body = getattr(getattr(e, "response", None), "text", None)
+        status_code = getattr(resp, "status_code", None)
+    try:
+        body = resp.text if resp is not None else None
+    except Exception:
+        body = None
     return _normalize_error(e, status_code=status_code, body=body)
 
 
@@ -76,6 +82,17 @@ def _messages_to_anthropic(
     return system_out, out
 
 
+_OVERLOAD_FALLBACK_MODEL = "claude-3-5-haiku-20241022"
+# Delays (seconds) for application-level overload retries, applied AFTER the SDK's
+# own max_retries=2 exponential backoff (which caps at 8 s per attempt).
+_OVERLOAD_RETRY_DELAYS = (15.0, 30.0)
+
+
+def _is_overload_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return "529" in str(e) or "overloaded_error" in msg or "overloaded" in msg
+
+
 class AnthropicChatProvider:
     """Anthropic chat. Vendor SDK imported lazily so it's only needed at call time."""
 
@@ -87,9 +104,38 @@ class AnthropicChatProvider:
     def _get_client(self) -> Any:
         if self._client is None:
             import anthropic
-            # api_key=None means AsyncAnthropic reads ANTHROPIC_API_KEY from env automatically
             self._client = anthropic.AsyncAnthropic(api_key=self._api_key)
         return self._client
+
+    async def _single_chat(
+        self,
+        client: Any,
+        kwargs: dict[str, Any],
+        model: str,
+        start: float,
+        stream: bool,
+    ) -> "ChatResult | AsyncIterator[StreamChunk]":
+        """One attempt at the Anthropic API (no application-level retry)."""
+        if stream:
+            return self._stream_chat(client, {**kwargs, "model": model}, model, start)
+        response = await client.messages.create(**{**kwargs, "model": model})
+        latency_ms = (time.perf_counter() - start) * 1000
+        u = Usage(
+            provider="anthropic",
+            model=model,
+            prompt_tokens=response.usage.input_tokens,
+            completion_tokens=response.usage.output_tokens,
+            total_tokens=response.usage.input_tokens + response.usage.output_tokens,
+            latency_ms=latency_ms,
+            request_id=getattr(response, "id", None),
+        )
+        text = "".join(block.text for block in response.content if hasattr(block, "text"))
+        tool_calls = [
+            {"id": block.id, "name": block.name, "input": dict(block.input) if block.input else {}}
+            for block in response.content
+            if getattr(block, "type", None) == "tool_use"
+        ]
+        return ChatResult(content=text, usage=u, finish_reason="end_turn", tool_calls=tool_calls)
 
     async def chat(
         self,
@@ -104,12 +150,11 @@ class AnthropicChatProvider:
         response_format: dict[str, Any] | None = None,
         system: str | None = None,
     ) -> "ChatResult | AsyncIterator[StreamChunk]":
-        model = model or self._default_model
+        target_model = model or self._default_model
         system_param, anthropic_messages = _messages_to_anthropic(messages, system)
         client = self._get_client()
 
         kwargs: dict[str, Any] = {
-            "model": model,
             "max_tokens": max_tokens,
             "messages": anthropic_messages,
             "temperature": temperature,
@@ -123,32 +168,43 @@ class AnthropicChatProvider:
         if response_format is not None:
             kwargs["output_format"] = response_format
 
-        start = time.perf_counter()
-        try:
-            if stream:
-                return self._stream_chat(client, kwargs, model, start)
-            response = await client.messages.create(**kwargs)
-            latency_ms = (time.perf_counter() - start) * 1000
-            u = Usage(
-                provider="anthropic",
-                model=model,
-                prompt_tokens=response.usage.input_tokens,
-                completion_tokens=response.usage.output_tokens,
-                total_tokens=response.usage.input_tokens + response.usage.output_tokens,
-                latency_ms=latency_ms,
-                request_id=getattr(response, "id", None),
-            )
-            text = "".join(block.text for block in response.content if hasattr(block, "text"))
-            tool_calls = [
-                {"id": block.id, "name": block.name, "input": dict(block.input) if block.input else {}}
-                for block in response.content
-                if getattr(block, "type", None) == "tool_use"
-            ]
-            return ChatResult(content=text, usage=u, finish_reason="end_turn", tool_calls=tool_calls)
-        except Exception as e:
-            if isinstance(e, ModelProviderError):
-                raise
-            raise _normalize_anthropic_error(e)
+        # Application-level overload retry: SDK caps its own backoff at 8 s; persistent
+        # 529 errors need longer waits and/or a fallback to a more available model.
+        # Schedule: primary model → wait 15 s → primary again → wait 30 s → fallback model.
+        attempts: list[tuple[str, float | None]] = [
+            (target_model, _OVERLOAD_RETRY_DELAYS[0]),
+            (target_model, _OVERLOAD_RETRY_DELAYS[1]),
+            (_OVERLOAD_FALLBACK_MODEL, None),
+        ]
+        # Collapse duplicate model entries when already on the fallback model.
+        if target_model == _OVERLOAD_FALLBACK_MODEL:
+            attempts = [(target_model, d) for _, d in attempts]
+
+        last_error: Exception | None = None
+        for attempt_model, delay_before_next in attempts:
+            start = time.perf_counter()
+            try:
+                return await self._single_chat(client, kwargs, attempt_model, start, stream)
+            except Exception as e:
+                if isinstance(e, ModelProviderError):
+                    if not _is_overload_error(e):
+                        raise
+                    last_error = e
+                else:
+                    normalized = _normalize_anthropic_error(e)
+                    if not _is_overload_error(normalized):
+                        raise normalized
+                    last_error = normalized
+
+                used = "fallback" if attempt_model != target_model else attempt_model
+                print(
+                    f"[ANTHROPIC] Overload on {used!r}; "
+                    + (f"retrying in {delay_before_next}s …" if delay_before_next else "giving up.")
+                )
+                if delay_before_next is not None:
+                    await asyncio.sleep(delay_before_next)
+
+        raise last_error  # type: ignore[misc]
 
     async def _stream_chat(
         self,

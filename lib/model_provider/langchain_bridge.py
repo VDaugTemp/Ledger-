@@ -98,6 +98,11 @@ class ModelProviderChatModel(BaseChatModel):
     temperature: float = 0.0
     max_tokens: int = 4096
     timeout: int | None = 60
+    # Prevent LangChain from silently switching ainvoke → _astream when
+    # astream_events injects a _StreamingCallbackHandler.  Streaming is still
+    # available explicitly via .astream() / graph SSE; the api/index.py
+    # on_chain_end fallback delivers the full response in the astream_events path.
+    disable_streaming: bool = True
 
     @property
     def _llm_type(self) -> str:

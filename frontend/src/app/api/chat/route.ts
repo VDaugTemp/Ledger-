@@ -18,11 +18,14 @@ type TextPart = { type: "text"; text: string };
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const { messages, threadId, profileContext, userId } = body as {
+  const { messages, threadId, profileContext, userId, profile, skippedFieldPaths, todayIso } = body as {
     messages?: UIMessage[];
     threadId?: string;
     profileContext?: string;
     userId?: string;
+    profile?: Record<string, unknown>;
+    skippedFieldPaths?: string[];
+    todayIso?: string;
   };
 
   const lastMsg = messages?.at(-1);
@@ -37,6 +40,9 @@ export async function POST(req: Request) {
     backendBody.config = { configurable: { thread_id: threadId.trim() } };
   }
   if (profileContext) backendBody.profile_context = profileContext;
+  if (profile) backendBody.profile = profile;
+  if (skippedFieldPaths) backendBody.skipped_field_paths = skippedFieldPaths;
+  if (todayIso) backendBody.today_iso = todayIso;
   if (userId) backendBody.user_id = userId;
 
   const backendRes = await fetch(`${BACKEND_URL}/app/chat`, {

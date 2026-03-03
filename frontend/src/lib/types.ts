@@ -87,3 +87,27 @@ export type ExtractResult = {
   confidenceTier: ConfidenceTier;
   notes?: string;
 };
+
+// ── Controller types ──────────────────────────────────────────────────────────
+
+export type Intent = "INFO" | "PROFILE_INPUT" | "WHAT_IF";
+
+export type TaskPacket = {
+  intent: Intent;
+  nextQuestion?: { id: string; fieldPath: string; question: string; priority: number } | null;
+  profileSummary: string;
+  retrievalQuery?: string | null;
+  retrievalFilters?: {
+    jurisdiction?: string;
+    doc_type?: string[];
+    topic_tags?: string[];
+    min_authority_rank?: number;
+  } | null;
+  decisionMap: {
+    residencyDecidable: boolean;
+    incomeScopeDecidable: boolean;
+    dtaDecidable: boolean;
+    fsiDecidable: boolean;
+  };
+  flags: Array<{ code: string; severity: "info" | "warn" | "high"; message: string }>;
+};

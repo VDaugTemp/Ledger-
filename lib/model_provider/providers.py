@@ -139,7 +139,12 @@ class AnthropicChatProvider:
                 request_id=getattr(response, "id", None),
             )
             text = "".join(block.text for block in response.content if hasattr(block, "text"))
-            return ChatResult(content=text, usage=u, finish_reason="end_turn")
+            tool_calls = [
+                {"id": block.id, "name": block.name, "input": dict(block.input) if block.input else {}}
+                for block in response.content
+                if getattr(block, "type", None) == "tool_use"
+            ]
+            return ChatResult(content=text, usage=u, finish_reason="end_turn", tool_calls=tool_calls)
         except Exception as e:
             if isinstance(e, ModelProviderError):
                 raise

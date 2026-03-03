@@ -2,16 +2,19 @@
 
 import asyncio
 import concurrent.futures
-from collections.abc import AsyncIterator, Iterator
+import json
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Any
 
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages.tool import ToolCall, ToolCallChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from lib.model_provider.config import get_model_provider
-from lib.model_provider.types import ChatMessage
+from lib.model_provider.types import ChatMessage, ChatResult as ProviderChatResult
 
 
 def _lc_messages_to_provider(messages: list[BaseMessage]) -> tuple[str | None, list[ChatMessage]]:
@@ -43,6 +46,29 @@ def _run_async(coro: Any) -> Any:
         return asyncio.run(coro)
 
 
+def _build_ai_message(result: ProviderChatResult) -> AIMessage:
+    """Build an AIMessage, including tool_calls when the provider returned tool-use blocks."""
+    usage_meta = {
+        "usage": {
+            "prompt_tokens": result.usage.prompt_tokens,
+            "completion_tokens": result.usage.completion_tokens,
+            "total_tokens": result.usage.total_tokens,
+            "latency_ms": result.usage.latency_ms,
+            "provider": result.usage.provider,
+            "model": result.usage.model,
+        }
+    }
+
+    tool_calls: list[ToolCall] = [
+        ToolCall(id=tc["id"], name=tc["name"], args=tc.get("input", {}))
+        for tc in (result.tool_calls or [])
+    ]
+
+    msg = AIMessage(content=result.content, tool_calls=tool_calls)
+    msg.response_metadata = usage_meta
+    return msg
+
+
 class ModelProviderEmbeddings(Embeddings):
     """LangChain Embeddings backed by ModelProvider. No direct OpenAI SDK usage here."""
 
@@ -68,7 +94,7 @@ class ModelProviderEmbeddings(Embeddings):
 class ModelProviderChatModel(BaseChatModel):
     """LangChain ChatModel backed by ModelProvider (Anthropic). Supports async streaming."""
 
-    model_name: str = "claude-3-5-haiku-20241022"
+    model_name: str = "claude-haiku-4-5-20251001"
     temperature: float = 0.0
     max_tokens: int = 4096
     timeout: int | None = 60
@@ -76,6 +102,29 @@ class ModelProviderChatModel(BaseChatModel):
     @property
     def _llm_type(self) -> str:
         return "model_provider_anthropic"
+
+    def bind_tools(
+        self,
+        tools: Sequence[Any],
+        *,
+        tool_choice: str | dict | None = None,
+        **kwargs: Any,
+    ) -> "ModelProviderChatModel":
+        """Convert LangChain tools to Anthropic format and bind them as invocation kwargs."""
+        anthropic_tools: list[dict[str, Any]] = []
+        for t in tools:
+            oai = convert_to_openai_tool(t)["function"]
+            anthropic_tools.append(
+                {
+                    "name": oai["name"],
+                    "description": oai.get("description", ""),
+                    "input_schema": oai.get("parameters", {"type": "object", "properties": {}}),
+                }
+            )
+        bound: dict[str, Any] = {"tools": anthropic_tools}
+        if tool_choice is not None:
+            bound["tool_choice"] = tool_choice
+        return self.bind(**bound, **kwargs)  # type: ignore[return-value]
 
     def _generate(
         self,
@@ -106,17 +155,7 @@ class ModelProviderChatModel(BaseChatModel):
             response_format=kwargs.get("response_format"),
             system=system,
         )
-        msg = AIMessage(content=result.content)
-        msg.response_metadata = {
-            "usage": {
-                "prompt_tokens": result.usage.prompt_tokens,
-                "completion_tokens": result.usage.completion_tokens,
-                "total_tokens": result.usage.total_tokens,
-                "latency_ms": result.usage.latency_ms,
-                "provider": result.usage.provider,
-                "model": result.usage.model,
-            }
-        }
+        msg = _build_ai_message(result)
         return ChatResult(generations=[ChatGeneration(message=msg)])
 
     def _stream(
@@ -142,6 +181,31 @@ class ModelProviderChatModel(BaseChatModel):
         run_manager: Any = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
+        # Anthropic tool-use responses contain no text delta, so pure streaming
+        # yields zero chunks and LangChain raises "No generations found in stream."
+        # Fall back to non-streaming when tools are present and emit one chunk.
+        if kwargs.get("tools"):
+            result = await self._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+            for gen in result.generations:
+                ai_msg = gen.message
+                tool_call_chunks: list[ToolCallChunk] = [
+                    ToolCallChunk(
+                        id=tc["id"],
+                        name=tc["name"],
+                        args=json.dumps(tc["args"]),
+                        index=i,
+                    )
+                    for i, tc in enumerate(ai_msg.tool_calls or [])  # type: ignore[union-attr]
+                ]
+                yield ChatGenerationChunk(
+                    message=AIMessageChunk(
+                        content=ai_msg.content,  # type: ignore[arg-type]
+                        tool_call_chunks=tool_call_chunks,
+                        response_metadata=ai_msg.response_metadata,
+                    )
+                )
+            return
+
         system, provider_messages = _lc_messages_to_provider(messages)
         config = get_model_provider()
         stream_iter = await config.chat_provider.chat(

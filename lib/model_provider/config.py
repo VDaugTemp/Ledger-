@@ -33,7 +33,7 @@ def get_model_provider() -> ModelProviderConfig:
     """
     global _default
     if _default is None:
-        chat_model = os.getenv("MODEL_PROVIDER_CHAT_MODEL", "claude-3-5-haiku-20241022")
+        chat_model = os.getenv("MODEL_PROVIDER_CHAT_MODEL", "claude-haiku-4-5-20251001")
         embed_model = os.getenv("MODEL_PROVIDER_EMBED_MODEL", "text-embedding-3-small")
         _default = ModelProviderConfig(
             chat_provider=AnthropicChatProvider(

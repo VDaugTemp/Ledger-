@@ -2,7 +2,7 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -21,7 +21,12 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { SparklesIcon, AlertCircleIcon, PlusIcon } from "lucide-react";
+import { SparklesIcon, AlertCircleIcon, PlusIcon, XIcon } from "lucide-react";
+import { useAuth } from "@/components/AuthProvider";
+import { useUserProfile } from "@/hooks/useUserProfile";
+import { formatProfileContext } from "@/lib/profileContext";
+import { generateOpenQuestions, applyProfilePatch } from "@/lib/openQuestions";
+import type { Profile, OpenQuestion } from "@/lib/types";
 
 const springTransition = { type: "spring" as const, stiffness: 380, damping: 30 };
 const springSoft = { type: "spring" as const, stiffness: 260, damping: 24 };
@@ -47,6 +52,8 @@ const staggerItemSubtle = {
 };
 
 const SESSION_KEY = "chatThreadId";
+
+const SKIP_PHRASES = ["prefer not to answer", "rather not say", "skip this", "skip"];
 
 const SUGGESTED_QUESTIONS = [
   "What are my tax obligations as a digital nomad?",
@@ -256,20 +263,86 @@ function resetThreadId(): string {
 }
 
 function ChatContent({ onNewChat }: { onNewChat: () => void }) {
-  const threadId = useMemo(() => getOrCreateThreadId(), []);
-  const transport = useMemo(
-    () => new DefaultChatTransport({ body: { threadId } }),
-    [threadId],
+  const { user, accessToken } = useAuth();
+  const { profile, userId, savePatch } = useUserProfile({
+    userId: user?.userId,
+    accessToken: accessToken ?? undefined,
+  });
+
+  // Session-only list of skipped field paths
+  const [skippedFieldPaths, setSkippedFieldPaths] = useState<string[]>([]);
+
+  // Compute next open question reactively from profile + skipped list
+  const openQuestions = useMemo(
+    () => (profile ? generateOpenQuestions(profile, skippedFieldPaths) : []),
+    [profile, skippedFieldPaths],
   );
+  const nextQuestion: OpenQuestion | null = openQuestions[0] ?? null;
+
+  const threadId = useMemo(() => getOrCreateThreadId(), []);
+
+  // Mutable body ref — DefaultChatTransport stores this object reference;
+  // mutations here are visible at send time without recreating the transport.
+  const chatBodyRef = useRef<Record<string, unknown>>({ threadId });
+  const profileContext = formatProfileContext(profile, nextQuestion);
+  chatBodyRef.current.threadId = threadId;
+  chatBodyRef.current.profileContext = profileContext || undefined;
+  chatBodyRef.current.userId = userId || undefined;
+
+  const transport = useMemo(
+    () => new DefaultChatTransport({ body: chatBodyRef.current }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- transport created once; body is mutated via ref
+    [],
+  );
+
   const { messages, sendMessage, status, stop } = useChat({ transport });
+
+  // Apply profile updates delivered as data-profile-update stream parts
+  const lastProcessedRef = useRef(0);
+  useEffect(() => {
+    const newMessages = messages.slice(lastProcessedRef.current);
+    if (newMessages.length === 0) return;
+
+    for (const msg of newMessages) {
+      if (msg.role !== "assistant") continue;
+      for (const part of msg.parts) {
+        if ((part as { type: string }).type === "data-profile-update" && profile && userId) {
+          const patch = (part as { type: string; data: unknown }).data as Partial<Profile>;
+          savePatch(
+            applyProfilePatch(profile, patch, {
+              source: "chat",
+              confidenceTier: "high",
+              timestampIso: new Date().toISOString(),
+            }),
+          ).catch(console.error);
+        }
+      }
+    }
+    lastProcessedRef.current = messages.length;
+  }, [messages, profile, userId, savePatch]);
 
   const isLoading = status === "submitted" || status === "streaming";
   const isThinking = status === "submitted";
   const isEmpty = messages.length === 0;
 
+  function isSkipMessage(text: string): boolean {
+    const lower = text.toLowerCase().trim();
+    return SKIP_PHRASES.some((p) => lower.includes(p));
+  }
+
+  function handleSkipQuestion() {
+    if (!nextQuestion) return;
+    setSkippedFieldPaths((prev) => [...prev, nextQuestion.fieldPath]);
+  }
+
   function handleSubmit(msg: PromptInputMessage) {
-    if (!msg.text.trim()) return;
-    sendMessage({ text: msg.text, files: msg.files });
+    const text = msg.text.trim();
+    if (!text) return;
+    if (nextQuestion && isSkipMessage(text)) {
+      setSkippedFieldPaths((prev) => [...prev, nextQuestion.fieldPath]);
+      return;
+    }
+    sendMessage({ text, files: msg.files });
   }
 
   function handleSuggestion(text: string) {
@@ -278,7 +351,7 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
 
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)]">
-      {/* Top bar: New chat (right) — resets thread and clears conversation */}
+      {/* Top bar */}
       <div className="flex-shrink-0 border-b border-border/30 flex items-center justify-end px-4 py-2">
         <motion.button
           type="button"
@@ -293,7 +366,8 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
           New chat
         </motion.button>
       </div>
-      {/* Status bar — only visible when active */}
+
+      {/* Status bar */}
       <AnimatePresence>
         {(isLoading || status === "error") && (
           <motion.div
@@ -311,17 +385,44 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
         )}
       </AnimatePresence>
 
+      {/* Next open question banner — shown only after first message and when not loading */}
+      <AnimatePresence>
+        {nextQuestion && !isEmpty && !isLoading && (
+          <motion.div
+            key={nextQuestion.id}
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={springSoft}
+            className="border-b border-primary/15 bg-primary/[0.04] overflow-hidden"
+          >
+            <div className="max-w-3xl mx-auto px-4 py-2 flex items-center justify-between gap-3">
+              <p className="text-xs text-primary/80 leading-snug flex-1">
+                <span className="font-medium text-primary">Next: </span>
+                {nextQuestion.question}
+              </p>
+              <button
+                onClick={handleSkipQuestion}
+                className="flex-shrink-0 text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors flex items-center gap-1"
+                title="Prefer not to answer"
+              >
+                <XIcon className="size-3" />
+                Skip
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Conversation */}
       <Conversation className="flex-1">
         <ConversationContent className="max-w-3xl mx-auto w-full">
           <AnimatePresence>
-            {/* Empty state */}
             {isEmpty && !isLoading && (
               <ChatEmptyState onSuggestionClick={handleSuggestion} />
             )}
           </AnimatePresence>
 
-          {/* Messages */}
           <AnimatePresence initial={false}>
             {messages.map((message) => (
               <motion.div
@@ -340,9 +441,7 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
                         {message.parts.map((part, i) => {
                           if (part.type === "text") {
                             return (
-                              <MessageResponse key={i}>
-                                {part.text}
-                              </MessageResponse>
+                              <MessageResponse key={i}>{part.text}</MessageResponse>
                             );
                           }
                           return null;
@@ -354,9 +453,7 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
                       {message.parts.map((part, i) => {
                         if (part.type === "text") {
                           return (
-                            <MessageResponse key={i}>
-                              {part.text}
-                            </MessageResponse>
+                            <MessageResponse key={i}>{part.text}</MessageResponse>
                           );
                         }
                         return null;
@@ -368,7 +465,6 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
             ))}
           </AnimatePresence>
 
-          {/* Thinking dots */}
           <AnimatePresence>
             {isThinking && <ThinkingIndicator key="thinking" />}
           </AnimatePresence>
@@ -382,7 +478,11 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
         <div className="max-w-3xl mx-auto">
           <PromptInput onSubmit={handleSubmit}>
             <PromptInputTextarea
-              placeholder="Ask about taxes, deductions, or financial planning…"
+              placeholder={
+                nextQuestion
+                  ? nextQuestion.question
+                  : "Ask about taxes, deductions, or financial planning…"
+              }
               disabled={isLoading}
             />
             <PromptInputFooter>

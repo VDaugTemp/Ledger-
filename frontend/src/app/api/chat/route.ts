@@ -18,9 +18,11 @@ type TextPart = { type: "text"; text: string };
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const { messages, threadId } = body as {
+  const { messages, threadId, profileContext, userId } = body as {
     messages?: UIMessage[];
     threadId?: string;
+    profileContext?: string;
+    userId?: string;
   };
 
   const lastMsg = messages?.at(-1);
@@ -30,12 +32,12 @@ export async function POST(req: Request) {
       .map((p) => p.text)
       .join("") ?? "";
 
-  const backendBody: { input: string; config?: { configurable: { thread_id: string } } } = {
-    input,
-  };
+  const backendBody: Record<string, unknown> = { input };
   if (typeof threadId === "string" && threadId.trim()) {
     backendBody.config = { configurable: { thread_id: threadId.trim() } };
   }
+  if (profileContext) backendBody.profile_context = profileContext;
+  if (userId) backendBody.user_id = userId;
 
   const backendRes = await fetch(`${BACKEND_URL}/app/chat`, {
     method: "POST",
@@ -95,6 +97,14 @@ export async function POST(req: Request) {
               }
             } catch {
               // skip malformed SSE chunks
+            }
+            currentEvent = "";
+          } else if (line.startsWith("data: ") && currentEvent === "profile_update") {
+            try {
+              const patch = JSON.parse(line.slice(6));
+              writer.write({ type: "data-profile-update", data: patch });
+            } catch {
+              // skip malformed profile update
             }
             currentEvent = "";
           }

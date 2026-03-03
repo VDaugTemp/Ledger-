@@ -52,3 +52,38 @@ export type Profile = {
     completenessScore?: number;
   };
 };
+
+// ─── Conversation-loop types ─────────────────────────────────────────────────
+
+export type OpenQuestionCategory = "mrd" | "gate" | "advisor" | "nice";
+export type OpenQuestionStatus = "open" | "answered" | "skipped";
+
+export type OpenQuestion = {
+  id: string;                    // stable, derived from fieldPath
+  fieldPath: string;             // e.g. "presence.trips" or "employment.foreignEmployer"
+  priority: number;              // higher = earlier
+  category: OpenQuestionCategory;
+  blocking: boolean;             // if missing => blocks certain outputs
+  question: string;              // user-facing question text
+  whyNeeded: string;             // short internal justification
+  status: OpenQuestionStatus;    // runtime only; not persisted in Profile
+  skipAllowed: boolean;
+};
+
+export type ConfidenceTier = "high" | "medium" | "low";
+
+export type PatchMeta = {
+  source: "wizard" | "chat" | "user_edit";
+  questionId?: string;
+  fieldPath?: string;
+  confidenceTier?: ConfidenceTier;
+  rawUserText?: string;
+  timestampIso: string;
+};
+
+export type ExtractResult = {
+  answeredFieldPaths: string[];
+  profilePatch: Partial<Profile>;
+  confidenceTier: ConfidenceTier;
+  notes?: string;
+};

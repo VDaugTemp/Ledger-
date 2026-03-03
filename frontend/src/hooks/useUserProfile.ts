@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createUser, getUser, patchProfile } from "@/lib/userApi";
+import { applyProfilePatch } from "@/lib/openQuestions";
 import type { Profile } from "@/lib/types";
 
 const USER_ID_KEY = "ns_tax_app:user_id";
@@ -94,15 +95,26 @@ export function useUserProfile(opts: Options = {}): UseUserProfileResult {
     async (patch: Partial<Profile>) => {
       if (!userId) return;
       setError(null);
+      // Optimistic update: apply locally before the network round-trip
+      setProfile((prev) =>
+        prev
+          ? applyProfilePatch(prev, patch, {
+              source: "user_edit",
+              timestampIso: new Date().toISOString(),
+            })
+          : prev,
+      );
       try {
-        const { profile: updated } = await patchProfile(userId, patch, token);
-        setProfile(updated);
+        const { profile: confirmed } = await patchProfile(userId, patch, token);
+        setProfile(confirmed); // reconcile with server truth
       } catch (err) {
+        // Rollback: refetch the authoritative server state
+        fetchProfile(userId).catch(() => undefined);
         setError(err instanceof Error ? err.message : "Failed to save");
         throw err;
       }
     },
-    [userId, token],
+    [userId, token, fetchProfile],
   );
 
   return { userId, profile, loading, error, savePatch, refresh };

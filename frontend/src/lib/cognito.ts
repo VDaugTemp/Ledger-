@@ -8,7 +8,7 @@ import {
 
 const REGION = process.env.NEXT_PUBLIC_COGNITO_REGION ?? "eu-west-2";
 const CLIENT_ID = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID ?? "";
-console.log("Cognito config:", { REGION, CLIENT_ID });
+
 const cognitoClient = new CognitoIdentityProviderClient({ region: REGION });
 
 export type CognitoTokens = {

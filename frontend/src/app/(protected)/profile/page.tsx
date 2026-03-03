@@ -6,6 +6,7 @@ import { useAuth } from "@/components/AuthProvider";
 import type { IncomeType, VisaType, HomeType, YesNoUnsure, Profile } from "@/lib/types";
 import { CountryCombobox } from "@/components/ui/country-combobox";
 import { CountryMultiSelect } from "@/components/ui/country-multi-select";
+import { generateOpenQuestions, computeCompletenessScore, applyProfilePatch } from "@/lib/openQuestions";
 
 const INCOME_TYPES: { value: IncomeType; label: string }[] = [
   { value: "employment", label: "Employment" },
@@ -50,7 +51,26 @@ export default function ProfilePage() {
     setSaving(true);
     setSaveError(null);
     try {
-      await savePatch(p);
+      // Compute the merged state locally (no network) to derive dataQuality
+      const merged = applyProfilePatch(profile, p, {
+        source: "user_edit",
+        timestampIso: new Date().toISOString(),
+      });
+      const openQs = generateOpenQuestions(merged);
+      const score = computeCompletenessScore(merged);
+      // Single PATCH with user change + recomputed dataQuality
+      await savePatch({
+        ...p,
+        dataQuality: {
+          ...merged.dataQuality,
+          missingFields: openQs.map((q) => ({
+            fieldPath: q.fieldPath,
+            question: q.question,
+            priority: q.priority,
+          })),
+          completenessScore: score,
+        },
+      });
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Save failed");
     } finally {
@@ -127,11 +147,11 @@ export default function ProfilePage() {
         </div>
         <ReadRow
           label="Profile complete"
-          value={profile?.dataQuality.mrdComplete ? "Yes" : "No"}
+          value={profile?.dataQuality?.mrdComplete ? "Yes" : "No"}
         />
         <ReadRow
           label="Completeness score"
-          value={profile ? `${profile.dataQuality.completenessScore}%` : "—"}
+          value={profile?.dataQuality?.completenessScore ? `${profile?.dataQuality?.completenessScore}%` : "—"}
         />
       </Section>
 
@@ -165,12 +185,12 @@ export default function ProfilePage() {
           <Toggle
             key={value}
             label={label}
-            checked={profile?.incomeTypes[value] ?? false}
+            checked={(profile?.incomeTypes || {})[value] ?? false}
             disabled={saving}
             onChange={() =>
               patch({
                 incomeTypes: {
-                  ...profile!.incomeTypes,
+                  ...(profile!.incomeTypes || {}),
                   [value]: !profile!.incomeTypes[value],
                 },
               })
@@ -184,13 +204,13 @@ export default function ProfilePage() {
         {/* Files tax elsewhere */}
         <Toggle
           label="Files tax elsewhere"
-          checked={profile?.advisorContext.filesTaxElsewhere ?? false}
+          checked={profile?.advisorContext?.filesTaxElsewhere ?? false}
           disabled={saving}
           onChange={() =>
             patch({
               advisorContext: {
                 ...profile!.advisorContext,
-                filesTaxElsewhere: !profile!.advisorContext.filesTaxElsewhere,
+                filesTaxElsewhere: !profile!.advisorContext?.filesTaxElsewhere,
               },
             })
           }
@@ -199,13 +219,13 @@ export default function ProfilePage() {
         {/* Company director */}
         <Toggle
           label="Company director"
-          checked={profile?.advisorContext.isCompanyDirector ?? false}
+          checked={profile?.advisorContext?.isCompanyDirector ?? false}
           disabled={saving}
           onChange={() =>
             patch({
               advisorContext: {
                 ...profile!.advisorContext,
-                isCompanyDirector: !profile!.advisorContext.isCompanyDirector,
+                isCompanyDirector: !profile!.advisorContext?.isCompanyDirector,
               },
             })
           }
@@ -216,7 +236,7 @@ export default function ProfilePage() {
           <span className="text-xs text-muted-foreground">Tax resident elsewhere?</span>
           <ChipGroup
             options={YNU_OPTIONS}
-            value={profile?.advisorContext.taxResidentElsewhere}
+            value={profile?.advisorContext?.taxResidentElsewhere}
             disabled={saving}
             onChange={(v) =>
               patch({
@@ -234,7 +254,7 @@ export default function ProfilePage() {
           <span className="text-xs text-muted-foreground">Visa type</span>
           <ChipGroup
             options={VISA_OPTIONS}
-            value={profile?.advisorContext.visaType}
+            value={profile?.advisorContext?.visaType}
             disabled={saving}
             onChange={(v) =>
               patch({
@@ -252,7 +272,7 @@ export default function ProfilePage() {
           <span className="text-xs text-muted-foreground">Permanent home in jurisdiction</span>
           <ChipGroup
             options={HOME_OPTIONS}
-            value={profile?.advisorContext.permanentHomeInJurisdiction}
+            value={profile?.advisorContext?.permanentHomeInJurisdiction}
             disabled={saving}
             onChange={(v) =>
               patch({
@@ -269,7 +289,7 @@ export default function ProfilePage() {
         <div className="px-4 py-3 space-y-1.5">
           <span className="text-xs text-muted-foreground">Citizenships</span>
           <CountryMultiSelect
-            value={profile?.advisorContext.citizenships ?? []}
+            value={profile?.advisorContext?.citizenships ?? []}
             disabled={saving}
             onChange={(citizenships) =>
               patch({

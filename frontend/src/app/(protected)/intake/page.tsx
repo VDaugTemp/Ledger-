@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useUserProfile } from "@/hooks/useUserProfile";
 import { useAuth } from "@/components/AuthProvider";
 import type { IncomeType, VisaType, YesNoUnsure } from "@/lib/types";
+import { generateOpenQuestions, computeCompletenessScore } from "@/lib/openQuestions";
 
 type WizardStep = 1 | 2 | 3;
 
@@ -112,7 +113,21 @@ export default function IntakePage() {
           onSave={handleSave}
           onBack={() => setStep(2)}
           onComplete={async () => {
-            await handleSave({ dataQuality: { intakeCompleted: true } });
+            if (!profile) return;
+            const openQs = generateOpenQuestions(profile);
+            const score = computeCompletenessScore(profile);
+            await handleSave({
+              dataQuality: {
+                ...profile.dataQuality,
+                intakeCompleted: true,
+                missingFields: openQs.map((q) => ({
+                  fieldPath: q.fieldPath,
+                  question: q.question,
+                  priority: q.priority,
+                })),
+                completenessScore: score,
+              },
+            });
             router.push("/");
           }}
         />

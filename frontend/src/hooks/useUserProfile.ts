@@ -24,35 +24,54 @@ export type UseUserProfileResult = {
   refresh: () => Promise<void>;
 };
 
-export function useUserProfile(): UseUserProfileResult {
-  const [userId, setUserId] = useState<string | null>(null);
+type Options = {
+  /** Pass userId from auth context to skip localStorage bootstrap. */
+  userId?: string;
+  /** Pass access token from auth context. */
+  accessToken?: string;
+};
+
+export function useUserProfile(opts: Options = {}): UseUserProfileResult {
+  const [userId, setUserId] = useState<string | null>(opts.userId ?? null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchProfile = useCallback(async (uid: string) => {
-    const { profile: fetched } = await getUser(uid);
-    setProfile(fetched);
-  }, []);
+  const token = opts.accessToken;
+
+  const fetchProfile = useCallback(
+    async (uid: string) => {
+      const { profile: fetched } = await getUser(uid, token);
+      setProfile(fetched);
+    },
+    [token],
+  );
 
   const bootstrap = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      let uid = getStoredUserId();
-      if (!uid) {
-        const { userId: newId } = await createUser();
-        storeUserId(newId);
-        uid = newId;
+      if (opts.userId) {
+        // Real auth mode: userId provided externally
+        setUserId(opts.userId);
+        await fetchProfile(opts.userId);
+      } else {
+        // Mock mode: manage userId via localStorage
+        let uid = getStoredUserId();
+        if (!uid) {
+          const { userId: newId } = await createUser(undefined, token);
+          storeUserId(newId);
+          uid = newId;
+        }
+        setUserId(uid);
+        await fetchProfile(uid);
       }
-      setUserId(uid);
-      await fetchProfile(uid);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load profile");
     } finally {
       setLoading(false);
     }
-  }, [fetchProfile]);
+  }, [opts.userId, token, fetchProfile]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     bootstrap();
@@ -65,7 +84,7 @@ export function useUserProfile(): UseUserProfileResult {
     try {
       await fetchProfile(userId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to refresh profile");
+      setError(err instanceof Error ? err.message : "Failed to refresh");
     } finally {
       setLoading(false);
     }
@@ -76,14 +95,14 @@ export function useUserProfile(): UseUserProfileResult {
       if (!userId) return;
       setError(null);
       try {
-        const { profile: updated } = await patchProfile(userId, patch);
+        const { profile: updated } = await patchProfile(userId, patch, token);
         setProfile(updated);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to save profile");
+        setError(err instanceof Error ? err.message : "Failed to save");
         throw err;
       }
     },
-    [userId],
+    [userId, token],
   );
 
   return { userId, profile, loading, error, savePatch, refresh };

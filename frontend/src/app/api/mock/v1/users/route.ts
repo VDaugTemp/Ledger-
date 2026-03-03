@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { nanoid } from "nanoid";
-import { users, profiles, makeDefaultProfile } from "../../_store";
+import { users, profiles, makeDefaultProfile, persistStore } from "../../_store";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({}));
@@ -9,6 +9,7 @@ export async function POST(request: Request) {
 
   users.set(userId, { userId, email: body.email, createdAt });
   profiles.set(userId, makeDefaultProfile());
+  persistStore();
 
   return NextResponse.json({ userId }, { status: 201 });
 }

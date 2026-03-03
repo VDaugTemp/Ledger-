@@ -46,8 +46,9 @@ export type Profile = {
     permanentHomeInJurisdiction?: HomeType;
   };
   dataQuality: {
-    mrdComplete: boolean;
-    missingFields: Array<{ fieldPath: string; question: string; priority: number }>;
-    completenessScore: number;
+    mrdComplete?: boolean;
+    intakeCompleted?: boolean;
+    missingFields?: Array<{ fieldPath: string; question: string; priority: number }>;
+    completenessScore?: number;
   };
 };

@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useUserProfile } from "@/hooks/useUserProfile";
+import { useAuth } from "@/components/AuthProvider";
 import type { IncomeType, VisaType, YesNoUnsure } from "@/lib/types";
 
 type WizardStep = 1 | 2 | 3;
@@ -20,7 +22,12 @@ const YES_NO_UNSURE: { value: YesNoUnsure; label: string }[] = [
 ];
 
 export default function IntakePage() {
-  const { profile, loading, error, savePatch } = useUserProfile();
+  const router = useRouter();
+  const { user, accessToken } = useAuth();
+  const { profile, loading, error, savePatch } = useUserProfile({
+    userId: user?.userId,
+    accessToken: accessToken ?? undefined,
+  });
   const [step, setStep] = useState<WizardStep>(1);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -104,6 +111,10 @@ export default function IntakePage() {
           saving={saving}
           onSave={handleSave}
           onBack={() => setStep(2)}
+          onComplete={async () => {
+            await handleSave({ dataQuality: { intakeCompleted: true } });
+            router.push("/");
+          }}
         />
       )}
     </div>
@@ -262,11 +273,13 @@ function Step3({
   saving,
   onSave,
   onBack,
+  onComplete,
 }: {
   profile: ReturnType<typeof useUserProfile>["profile"];
   saving: boolean;
   onSave: (patch: Parameters<ReturnType<typeof useUserProfile>["savePatch"]>[0]) => Promise<void>;
   onBack: () => void;
+  onComplete: () => Promise<void>;
 }) {
   const hasEmployment = profile?.incomeTypes.employment;
 
@@ -335,14 +348,20 @@ function Step3({
 
       <div className="flex items-center justify-between">
         <button
+          type="button"
           onClick={onBack}
           className="px-5 py-2 rounded-xl text-sm border border-border/60 text-muted-foreground hover:text-foreground transition-colors"
         >
           Back
         </button>
-        <span className="text-xs text-muted-foreground">
-          {saving ? "Saving…" : "Changes saved automatically"}
-        </span>
+        <button
+          type="button"
+          onClick={onComplete}
+          disabled={saving}
+          className="px-5 py-2 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Complete"}
+        </button>
       </div>
     </div>
   );

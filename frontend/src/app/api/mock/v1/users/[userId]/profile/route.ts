@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { users, profiles, makeDefaultProfile } from "../../../../_store";
+import { users, profiles, makeDefaultProfile, persistStore } from "../../../../_store";
 import type { Profile } from "@/lib/types";
 
 export async function PATCH(
@@ -41,6 +41,7 @@ export async function PATCH(
   };
 
   profiles.set(userId, updated);
+  persistStore();
 
   return NextResponse.json({ profile: updated });
 }

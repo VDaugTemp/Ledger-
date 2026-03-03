@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
+import { useAuth } from "@/components/AuthProvider";
+import { useRouter } from "next/navigation";
 
 const capabilities = [
   { title: "Tax planning", detail: "across jurisdictions" },
@@ -30,6 +32,14 @@ const fadeUp = (delay = 0) => ({
 
 export default function Home() {
   const reduced = useReducedMotion();
+  const { user, signOut } = useAuth();
+  const router = useRouter();
+
+  function handleSignOut() {
+    signOut();
+    router.replace("/auth/sign-in");
+  }
+
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-6 relative overflow-hidden min-h-0">
       {/* Ambient glow — primary (teal/cyan) tint */}
@@ -43,6 +53,18 @@ export default function Home() {
       />
 
       <div className="max-w-xl w-full text-center space-y-10 py-20">
+        {/* Signed-in indicator */}
+        <motion.p {...fadeUp(0)} className="text-xs text-muted-foreground/60">
+          Signed in as {user?.email} &middot;{" "}
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="hover:text-foreground transition-colors underline-offset-2 hover:underline"
+          >
+            Sign out
+          </button>
+        </motion.p>
+
         {/* Eyebrow */}
         <motion.div {...fadeUp(0)} className="inline-block">
           <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-border/60 bg-card/40 text-[11px] text-muted-foreground tracking-[0.12em] uppercase">

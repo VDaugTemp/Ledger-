@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync } from "fs";
+import { join } from "path";
 import type { Profile } from "@/lib/types";
 
 export type UserRecord = {
@@ -6,9 +8,43 @@ export type UserRecord = {
   createdAt: string;
 };
 
-// Module-level in-memory store (resets on server restart — fine for prototype)
-export const users = new Map<string, UserRecord>();
-export const profiles = new Map<string, Profile>();
+// ── File-based persistence ────────────────────────────────────────────────────
+
+const DB_PATH = join(process.cwd(), ".mock-db.json");
+
+type DbData = {
+  users: Record<string, UserRecord>;
+  profiles: Record<string, Profile>;
+};
+
+function loadDb(): DbData {
+  try {
+    const raw = readFileSync(DB_PATH, "utf8");
+    return JSON.parse(raw) as DbData;
+  } catch {
+    return { users: {}, profiles: {} };
+  }
+}
+
+export function persistStore() {
+  try {
+    const data: DbData = {
+      users: Object.fromEntries(users),
+      profiles: Object.fromEntries(profiles),
+    };
+    writeFileSync(DB_PATH, JSON.stringify(data, null, 2), "utf8");
+  } catch {
+    // ignore write errors in dev
+  }
+}
+
+// ── In-memory store (hydrated from file on startup) ──────────────────────────
+
+const db = loadDb();
+export const users = new Map<string, UserRecord>(Object.entries(db.users));
+export const profiles = new Map<string, Profile>(Object.entries(db.profiles));
+
+// ── Default profile ───────────────────────────────────────────────────────────
 
 export function makeDefaultProfile(): Profile {
   return {
@@ -30,6 +66,7 @@ export function makeDefaultProfile(): Profile {
     },
     dataQuality: {
       mrdComplete: false,
+      intakeCompleted: false,
       missingFields: [],
       completenessScore: 0,
     },

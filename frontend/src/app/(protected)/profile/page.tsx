@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useUserProfile } from "@/hooks/useUserProfile";
+import { useAuth } from "@/components/AuthProvider";
 import type { IncomeType, VisaType, HomeType, YesNoUnsure, Profile } from "@/lib/types";
 import { CountryCombobox } from "@/components/ui/country-combobox";
 import { CountryMultiSelect } from "@/components/ui/country-multi-select";
@@ -35,7 +36,11 @@ const YNU_OPTIONS: { value: YesNoUnsure; label: string }[] = [
 const ASSESSMENT_YEARS = [2023, 2024, 2025, 2026];
 
 export default function ProfilePage() {
-  const { userId, profile, loading, error, savePatch, refresh } = useUserProfile();
+  const { user, accessToken } = useAuth();
+  const { userId, profile, loading, error, savePatch, refresh } = useUserProfile({
+    userId: user?.userId,
+    accessToken: accessToken ?? undefined,
+  });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -369,4 +374,3 @@ function ChipGroup({
     </div>
   );
 }
-

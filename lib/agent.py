@@ -79,18 +79,37 @@ class AgentState(TypedDict):
 
 
 # ── Answer node system prompt ─────────────────────────────────────────────────
-_ANSWER_SYSTEM = """You are an expert Malaysian tax advisor for digital nomads and expats.
+_ANSWER_SYSTEM = """You are a Malaysian tax guide for digital nomads and expats. You explain how Malaysian tax rules apply; you do not give formal tax advice or calculate final liabilities.
+
+Tone:
+- Use calm, professional language suitable for a regulated financial environment.
+- No emoji, no checkmarks, no ALL CAPS, no dramatic formatting.
+- Use conditional and neutral phrasing: "Based on what you've shared...", "If these conditions apply...", "This would typically depend on...", "To clarify how this may apply, it would help to know..."
+- Never promise exact tax amounts, definitive obligations, or guaranteed outcomes.
 
 Rules:
 - Never give definitive tax advice; qualify with "generally", "typically", "based on the rules".
-- Cite document names, section numbers, or thresholds when stating rules.
+- Cite document names, section numbers, or thresholds when stating rules (e.g. "ITA s7(1)(a)", "PR 11/2017", "Schedule 6").
 - Answer the user's question FIRST.
-- Then, if <next_question> appears in your context, ask it VERBATIM at the end.
+- If your context contains an [INSTRUCTION] block with a follow-up question, ask that question word for word at the end of your response — preceded by one short neutral bridge sentence such as "To understand how these rules may apply in your situation, it would help to know:". Do not output the [INSTRUCTION] block itself.
 - Ask AT MOST ONE question per response.
-- No filler, padding, or repetition.
+- Keep responses concise and structured. No filler, padding, or repetition.
 
-Banned phrases (replace with softer language if you catch yourself using them):
-  "you should", "you definitely", "you don't need", "you are required to", "you must"
+Faithfulness rule (critical):
+- Base every factual claim strictly on text present in <retrieved_context>.
+- Do not add thresholds, conditions, or rules from general knowledge if they are absent from the retrieved text.
+- If a specific detail is not covered in the retrieved materials, say "the retrieved materials do not address [detail]" rather than inferring from memory.
+
+Advice and calculation requests:
+- If the user asks for exact tax payable, precise liability figures, confirmation they do or do not owe tax, or strategic planning advice:
+  1. Explain the governing rule at a high level.
+  2. Clarify what factors determine the outcome.
+  3. State that final tax liability requires review by a licensed tax agent.
+  4. Offer (once, neutrally): "If you'd like formal confirmation or filing support, a licensed tax agent can review your full facts."
+
+Banned phrases (replace with softer language):
+  "you should", "you definitely", "you don't need", "you are required to", "you must",
+  "must provide", "I will give you exact", "definitively", "you will owe"
 """
 
 # ── Controller node ───────────────────────────────────────────────────────────
@@ -276,6 +295,35 @@ def controller_node(state: AgentState) -> dict:
 
 MIN_SCORE = 0.25  # Minimum Qdrant relevance score to consider retrieval successful
 
+_HYDE_SYSTEM = (
+    "You are a Malaysian tax law expert. Write a concise excerpt (3-5 sentences) from a "
+    "Malaysian tax statute or LHDN public ruling that directly answers the question below. "
+    "Use formal legal language and cite specific section numbers where possible. "
+    "Do not add commentary, caveats, or advice — write only as the source document would."
+)
+
+
+async def _hyde_query(question: str) -> str:
+    """HyDE: generate a hypothetical legal passage and use it as the embedding query.
+
+    User queries are conversational; source chunks are formal legal text. Embedding a
+    hypothetical answer written in the register of the source documents dramatically
+    reduces the semantic gap and improves retrieval precision.
+    Falls back to the original question if generation fails.
+    """
+    try:
+        model = ModelProviderChatModel(timeout=20)
+        response = await model.ainvoke([
+            SystemMessage(content=_HYDE_SYSTEM),
+            HumanMessage(content=question),
+        ])
+        text = response.content if isinstance(response.content, str) else question
+        print(f"[HYDE] generated passage ({len(text)} chars) for query: {question[:60]}")
+        return text
+    except Exception as exc:
+        print(f"[HYDE] fallback to original query: {exc}")
+        return question
+
 
 async def retrieve_node(state: AgentState) -> dict:
     task_packet = state.get("task_packet") or {}
@@ -283,10 +331,13 @@ async def retrieve_node(state: AgentState) -> dict:
     if not query:
         return {"retrieved_chunks": [], "max_qdrant_score": 0.0}
 
+    # HyDE: embed a hypothetical document instead of the raw user query
+    embedding_query = await _hyde_query(query)
+
     vs = _get_vector_store()
     try:
         docs_and_scores = await asyncio.to_thread(
-            vs.similarity_search_with_score, query, k=5
+            vs.similarity_search_with_score, embedding_query, k=5
         )
     except Exception as exc:
         print(f"[RETRIEVE] Error: {exc}")
@@ -440,10 +491,9 @@ async def answer_node(state: AgentState) -> dict:
     next_q = task_packet.get("nextQuestion")
     if next_q:
         context_parts.append(
-            f"<next_question>\n"
-            f"After answering the user, ask this question verbatim:\n"
-            f"\"{next_q['question']}\"\n"
-            f"</next_question>"
+            f"[INSTRUCTION — do not repeat this block in your response]\n"
+            f"End your response with this question, word for word:\n"
+            f"{next_q['question']}"
         )
 
     llm_messages: list = [SystemMessage(content=_ANSWER_SYSTEM)]
@@ -463,10 +513,33 @@ async def answer_node(state: AgentState) -> dict:
 _SOFTENING: dict[str, str] = {
     "you should": "you may want to",
     "definitely": "generally",
+    "definitively": "generally",
     "you don't need": "you may not need",
     "you are required to": "it's generally required that",
-    "you must": "it's typically the case that you must",
+    "you must": "it is generally required to",
+    "must provide": "it would help to provide",
+    "I will give you exact": "I can outline",
+    "you will owe": "you may be liable for",
 }
+
+# Matches emoji characters across standard Unicode blocks
+_EMOJI_RE = re.compile(
+    "[\U0001F300-\U0001F9FF"   # symbols, pictographs, emoticons, transport
+    "\U0000FE00-\U0000FE0F"    # variation selectors
+    "\U00002600-\U000027BF"    # misc symbols (includes ✓ ✗ ☑ etc.)
+    "\U0001FA00-\U0001FA9F"    # chess, medical, other symbols
+    "\U00002702-\U000027B0"    # dingbats
+    "]+",
+    flags=re.UNICODE,
+)
+
+# Matches words written entirely in uppercase (3+ letters) outside markdown headings
+_ALLCAPS_RE = re.compile(r"(?<![#*`])\b([A-Z]{3,})\b")
+
+
+def _flatten_allcaps(match: re.Match) -> str:
+    word = match.group(1)
+    return word.title()
 
 
 def critic_node(state: AgentState) -> dict:
@@ -480,8 +553,10 @@ def critic_node(state: AgentState) -> dict:
         text = " ".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in last_ai.content)
     else:
         text = last_ai.content
-    
+
     modified = False
+
+    # 1. Phrase softening
     for phrase, replacement in _SOFTENING.items():
         pattern = re.compile(re.escape(phrase), re.IGNORECASE)
         new_text, count = pattern.subn(replacement, text)
@@ -489,7 +564,21 @@ def critic_node(state: AgentState) -> dict:
             text = new_text
             modified = True
 
-    # Warn if >2 question marks (for monitoring)
+    # 2. Remove emoji (multiple emoji signal dramatic tone; strip all for consistency)
+    emoji_matches = _EMOJI_RE.findall(text)
+    if len(emoji_matches) >= 2:
+        text = _EMOJI_RE.sub("", text).strip()
+        modified = True
+        print(f"[CRITIC] Stripped {len(emoji_matches)} emoji")
+
+    # 3. Flatten ALL CAPS words to title case (e.g. "IMPORTANT" → "Important")
+    new_text, count = _ALLCAPS_RE.subn(_flatten_allcaps, text)
+    if count:
+        text = new_text
+        modified = True
+        print(f"[CRITIC] Flattened {count} ALL CAPS word(s)")
+
+    # 4. Warn if >1 question mark (for monitoring)
     q_count = len(re.findall(r"\?(?!\s*[\]\)])", text))
     if q_count > 1:
         print(f"[CRITIC] Warning: {q_count} question marks in response")

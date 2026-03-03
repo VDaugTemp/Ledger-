@@ -558,12 +558,32 @@ _FACT_RE = re.compile(
     r"|in\s+malaysia\b)",
     re.IGNORECASE,
 )
+# Detects genuine questions using first-person phrasing — these are INFO, not PROFILE_INPUT.
+# Must be checked before _FACT_RE so "I spent 190 days. Am I resident?" → INFO not PROFILE_INPUT.
+_INFO_QUESTION_RE = re.compile(
+    r"(\?"                                          # any question mark
+    r"|\bam\s+i\b"                                  # "Am I resident?"
+    r"|\bdo\s+i\b"                                  # "Do I owe tax?"
+    r"|\bdoes\s+(that|it|this|my|the)\b"            # "Does that affect my tax?"
+    r"|\bis\s+(my|it|this|that|there|income)\b"     # "Is my salary taxable?"
+    r"|\bare\s+(foreign|dividends|they|there)\b"    # "Are foreign dividends taxable?"
+    r"|\bwill\s+i\b"                                # "Will I owe?"
+    r"|\bwhat\s+(is|are|income|form|happens|changed|counts)\b"  # factual questions
+    r"|\bwhich\s+(form|tax|rule|rate)\b"            # "Which form do I use?"
+    r"|\bwhen\s+(is|do|should|are)\b"               # "When is the deadline?"
+    r"|\bhow\s+(are|is|do|does)\b)",                # "How are they taxed?"
+    re.IGNORECASE,
+)
 
 
 def intent_classifier(message: str) -> dict:
     """Rule-based intent classifier. No LLM."""
     if _WHAT_IF_RE.search(message):
         return {"intent": "WHAT_IF"}
+    # Questions that use first-person phrasing are INFO requests, not profile data submissions.
+    # Check before _FACT_RE to avoid misclassifying "I spent X days. Am I resident?" as PROFILE_INPUT.
+    if _INFO_QUESTION_RE.search(message):
+        return {"intent": "INFO"}
     if _DATE_RE.search(message) or _FACT_RE.search(message):
         return {"intent": "PROFILE_INPUT"}
     return {"intent": "INFO"}

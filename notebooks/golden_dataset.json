@@ -1,0 +1,272 @@
+[
+  {
+    "id": "res_01",
+    "question": "I spent 190 days in Malaysia in 2025. Am I resident for tax?",
+    "ground_truth_short": "Under ITA s7 and PR 11/2017, 182 or more days in Malaysia in a year generally makes an individual tax-resident. 190 days exceeds this threshold so you would typically be considered resident for 2025.",
+    "expected_topics": ["Section 7", "182-day rule", "PR 11/2017"],
+    "expected_doc_types": ["Act", "PR"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "res_02",
+    "question": "I was in Malaysia for exactly 182 days in 2025. Am I a tax resident?",
+    "ground_truth_short": "Yes. ITA s7 and PR 11/2017 state that 182 days or more in a calendar year satisfies the main residence test.",
+    "expected_topics": ["Section 7", "182-day rule"],
+    "expected_doc_types": ["Act", "PR"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "res_03",
+    "question": "I was in Malaysia Oct 2025 to March 2026. Does that make me resident for 2025 and 2026?",
+    "ground_truth_short": "PR 11/2017 contains a linked-year test: if you are resident in one year and in the immediately preceding or following year, and the days span both years, you may be resident in both years. Entry and exit dates are needed to calculate the exact day counts.",
+    "expected_topics": ["linked-year", "PR 11/2017"],
+    "expected_doc_types": ["PR"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "res_04",
+    "question": "I left Malaysia on 1 December 2025 and returned on 15 January 2026. Do the days in both years count?",
+    "ground_truth_short": "Days are counted per calendar year. December days count toward 2025; January days count toward 2026. Each year must be assessed separately under ITA s7.",
+    "expected_topics": ["Section 7", "calendar year", "day count"],
+    "expected_doc_types": ["Act", "PR"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "res_05",
+    "question": "What is the 182-day rule for Malaysian tax residency?",
+    "ground_truth_short": "Under ITA s7(1)(a), an individual is resident if present in Malaysia for 182 or more days in a calendar year.",
+    "expected_topics": ["Section 7", "182-day rule"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "res_06",
+    "question": "Can I be a tax resident in Malaysia if I was only here for 120 days but stayed the prior year too?",
+    "ground_truth_short": "PR 11/2017 describes the linked-period and habitual residence tests. 120 days alone does not trigger the main s7(1)(a) test, but linking with the prior year or other secondary tests might apply depending on the full pattern of presence.",
+    "expected_topics": ["linked-year", "PR 11/2017", "habitual residence"],
+    "expected_doc_types": ["PR"],
+    "requires_citation": true,
+    "type": "WHAT_IF"
+  },
+  {
+    "id": "res_07",
+    "question": "I am a Malaysian citizen but I've lived abroad for 5 years. Am I still a tax resident?",
+    "ground_truth_short": "Malaysian tax residency is based on physical presence (days in Malaysia), not citizenship. A citizen abroad for 5 years would not be resident under the main ITA s7 test unless they satisfy a presence-based rule in a given year.",
+    "expected_topics": ["Section 7", "physical presence"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "res_08",
+    "question": "What happens if I am not a tax resident in Malaysia?",
+    "ground_truth_short": "Non-residents are taxed at a flat rate on Malaysia-sourced income and must file Form M. They are generally not entitled to personal reliefs available to residents.",
+    "expected_topics": ["non-resident", "Form M", "flat rate"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "inc_01",
+    "question": "I work remotely for a US company and am a Malaysian tax resident. Is my salary taxable in Malaysia?",
+    "ground_truth_short": "As a tax resident, all income derived from Malaysia is taxable. Income from employment exercised outside Malaysia paid by a foreign employer may be exempt under the FSI rules introduced in 2022, but the specific conditions depend on whether the income is remitted and the type of employment.",
+    "expected_topics": ["employment income", "FSI", "foreign income"],
+    "expected_doc_types": ["Act", "Guidelines"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "inc_02",
+    "question": "I visited Malaysia for 45 days total and worked remotely for my employer. Do I owe tax?",
+    "ground_truth_short": "With 45 days you are not tax-resident under the main 182-day rule. Whether income is taxable depends on whether you exercised employment in Malaysia. The employment income rules (PR 8/2011 covers benefits, ITA s13 covers employment income) and your employment contract structure are relevant.",
+    "expected_topics": ["employment income", "non-resident", "days in Malaysia"],
+    "expected_doc_types": ["Act", "PR"],
+    "requires_citation": false,
+    "type": "INFO"
+  },
+  {
+    "id": "inc_03",
+    "question": "I am a freelance contractor invoicing a Malaysian company. Is my income taxable?",
+    "ground_truth_short": "Contractor income from services performed in Malaysia is generally Malaysia-sourced and taxable. If you are non-resident, a withholding tax may apply. Residency status and where services are physically performed are key factors.",
+    "expected_topics": ["contractor income", "withholding tax", "source of income"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "inc_04",
+    "question": "What income is considered Malaysia-sourced under the Income Tax Act?",
+    "ground_truth_short": "Under ITA s4, Malaysia-sourced income includes employment exercised in Malaysia, business income from Malaysian operations, and income derived from Malaysia. The source rules are fact-specific.",
+    "expected_topics": ["Section 4", "source of income", "Malaysia-sourced"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "inc_05",
+    "question": "I receive a salary from a foreign employer. Is it taxable in Malaysia if I never physically work there?",
+    "ground_truth_short": "If you are resident but never exercise your employment duties in Malaysia, the income is generally not Malaysia-sourced. Since 2022 FSI rules, foreign-sourced income remitted to Malaysia may also be exempt in certain conditions.",
+    "expected_topics": ["employment income", "foreign employer", "FSI"],
+    "expected_doc_types": ["Act", "Guidelines"],
+    "requires_citation": true,
+    "type": "WHAT_IF"
+  },
+  {
+    "id": "inc_06",
+    "question": "My employer is a US company but charges my salary to the Malaysian subsidiary. Does that affect my tax?",
+    "ground_truth_short": "Yes. If salary is borne by or recharged to a Malaysian entity (permanent establishment or subsidiary), it is treated as Malaysia-sourced employment income and is generally taxable under ITA s13, even if the employer is foreign.",
+    "expected_topics": ["salary borne by local entity", "permanent establishment", "DTA"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "inc_07",
+    "question": "Are there any exemptions for employment income in Malaysia?",
+    "ground_truth_short": "ITA Schedule 6 and various public rulings list exemptions. Common ones include certain allowances, reimbursements, and benefits-in-kind under PR 8/2011. Certain employment income of non-citizens working in promoted activities may also be exempt.",
+    "expected_topics": ["Schedule 6", "exemptions", "employment income"],
+    "expected_doc_types": ["Act", "PR"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "inc_08",
+    "question": "If I earn both employment and business income, how are they taxed?",
+    "ground_truth_short": "Both are taxed under ITA s4. Employment income is assessed under s4(b) and business income under s4(a). Resident individuals file Form B when they have business income; otherwise Form BE. Both income streams are aggregated and taxed at progressive rates.",
+    "expected_topics": ["Section 4", "employment income", "business income", "Form B"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "dta_01",
+    "question": "I was in Malaysia 150 days employed by a UK company. Do I need to pay Malaysian tax?",
+    "ground_truth_short": "Under the Malaysia-UK DTA Article 15, employment income is generally taxable only in the country of residence unless the employment is exercised in the other state and the employer is resident there or the remuneration is borne by a permanent establishment. With 150 days you are not tax-resident in Malaysia under the main rule, so Malaysian tax on salary may be avoided unless borne by a Malaysian entity.",
+    "expected_topics": ["DTA", "Article 15", "employment income", "150 days"],
+    "expected_doc_types": ["Act", "PR"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "dta_02",
+    "question": "Does Malaysia have a double tax agreement with the UK?",
+    "ground_truth_short": "Yes, Malaysia and the UK have a Double Taxation Agreement. It covers income from employment, dividends, interest, royalties, and other income categories, with specific articles governing each type.",
+    "expected_topics": ["DTA", "UK", "double tax agreement"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": false,
+    "type": "INFO"
+  },
+  {
+    "id": "dta_03",
+    "question": "What is a permanent establishment in Malaysian tax law and why does it matter?",
+    "ground_truth_short": "A permanent establishment (PE) is a fixed place of business through which a foreign enterprise carries on its business. Under Malaysia's DTAs, if a foreign company has a PE in Malaysia, its business profits attributable to that PE are taxable in Malaysia. The concept also affects DTA Article 15 employment income tests.",
+    "expected_topics": ["permanent establishment", "DTA", "business profits"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "dta_04",
+    "question": "I work for a foreign company that has an office in Malaysia. Does that affect my personal tax?",
+    "ground_truth_short": "If your employer has a PE in Malaysia and your salary is borne by that PE, your employment income is generally taxable in Malaysia under ITA s13, regardless of DTA protections. If no PE exists and you are not tax-resident, DTA relief may apply.",
+    "expected_topics": ["permanent establishment", "DTA", "employment income", "salary borne"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "WHAT_IF"
+  },
+  {
+    "id": "dta_05",
+    "question": "Can I claim DTA relief to avoid double taxation on my Malaysian income?",
+    "ground_truth_short": "Yes. If you are a tax resident of a country with a DTA with Malaysia, you may claim relief under the treaty to avoid being taxed twice on the same income. The specific relief depends on the treaty article applicable to your income type.",
+    "expected_topics": ["DTA", "double tax relief", "treaty resident"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": false,
+    "type": "INFO"
+  },
+  {
+    "id": "dta_06",
+    "question": "What is the DTA tie-breaker rule if I am considered resident in both Malaysia and another country?",
+    "ground_truth_short": "Most of Malaysia's DTAs follow the OECD model tie-breaker sequence: permanent home, centre of vital interests, habitual abode, then nationality. If unresolved, the competent authorities negotiate. The relevant DTA article should be consulted.",
+    "expected_topics": ["DTA", "tie-breaker", "dual residence"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": false,
+    "type": "INFO"
+  },
+  {
+    "id": "fsi_01",
+    "question": "I'm resident in Malaysia and receive foreign dividends. If I transfer them into Malaysia, is it taxable?",
+    "ground_truth_short": "Under the June 2024 FSI guidelines and Schedule 6 of the ITA, foreign-sourced income (including dividends) remitted to Malaysia by a resident individual may be exempt, but the conditions and any excluded categories should be verified. The guidelines introduced specific conditions effective from 2022.",
+    "expected_topics": ["FSI", "foreign dividends", "Schedule 6", "remittance"],
+    "expected_doc_types": ["Guidelines", "Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "fsi_02",
+    "question": "Are foreign interest payments received in Malaysia taxable for a resident individual?",
+    "ground_truth_short": "Under the post-2022 FSI framework, foreign-sourced interest remitted to Malaysia may be exempt under Schedule 6 conditions. The June 2024 guidelines clarify the applicable conditions. Professional advice is recommended to confirm eligibility.",
+    "expected_topics": ["FSI", "foreign interest", "Schedule 6"],
+    "expected_doc_types": ["Guidelines", "Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "fsi_03",
+    "question": "What changed about taxing foreign income in Malaysia in 2022?",
+    "ground_truth_short": "From 1 January 2022, Malaysia removed the general exemption for foreign-sourced income received in Malaysia by resident individuals. Only specific categories listed under Schedule 6 remain exempt. The June 2024 amendment guidelines clarified conditions further.",
+    "expected_topics": ["FSI", "2022 change", "Schedule 6", "remittance"],
+    "expected_doc_types": ["Guidelines", "Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "fsi_04",
+    "question": "I have a foreign rental property. If I bring rent money into my Malaysian bank account, is it taxable?",
+    "ground_truth_short": "Rental income from a foreign property remitted to Malaysia by a resident individual is foreign-sourced income. Under the post-2022 rules and June 2024 guidelines, this may be subject to tax unless an applicable Schedule 6 exemption applies.",
+    "expected_topics": ["FSI", "foreign rental", "remittance", "Schedule 6"],
+    "expected_doc_types": ["Guidelines", "Act"],
+    "requires_citation": true,
+    "type": "WHAT_IF"
+  },
+  {
+    "id": "fil_01",
+    "question": "Which Malaysian tax form should I file as a resident with only employment income?",
+    "ground_truth_short": "A resident individual with only employment income files Form BE. The filing deadline is generally 30 April of the following year.",
+    "expected_topics": ["Form BE", "resident", "filing"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "fil_02",
+    "question": "When is the deadline for filing Malaysian income tax?",
+    "ground_truth_short": "For resident individuals, Form BE is due by 30 April and Form B by 30 June of the year following the assessment year. E-filing extensions may apply. Non-residents file Form M by 30 April.",
+    "expected_topics": ["filing deadline", "Form BE", "Form B", "Form M"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "fil_03",
+    "question": "I have both employment and freelance income. Which form do I use?",
+    "ground_truth_short": "A resident individual with both employment and business/contractor income files Form B, due 30 June. The form covers all income categories including business income.",
+    "expected_topics": ["Form B", "business income", "contractor"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  },
+  {
+    "id": "fil_04",
+    "question": "What is Form M and who needs to file it?",
+    "ground_truth_short": "Form M is the Malaysian income tax return for non-resident individuals. Non-residents earning Malaysia-sourced income are required to file Form M, typically by 30 April of the following year.",
+    "expected_topics": ["Form M", "non-resident", "filing"],
+    "expected_doc_types": ["Act"],
+    "requires_citation": true,
+    "type": "INFO"
+  }
+]

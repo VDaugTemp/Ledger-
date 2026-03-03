@@ -4,9 +4,9 @@
 import type { Profile } from "./types";
 
 function getBaseUrl(): string {
-  if (process.env.NEXT_PUBLIC_USE_MOCK_API === "true") {
-    return "/api/mock";
-  }
+  // if (process.env.NEXT_PUBLIC_USE_MOCK_API === "true") {
+  //   return "/api/mock";
+  // }
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 }
 

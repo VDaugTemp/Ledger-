@@ -26,10 +26,12 @@ from lib.deterministic_tools import (
     apply_profile_patch,
     consistency_checker,
     filing_form_selector,
+    freshness_requested as detect_freshness,
     intent_classifier,
     next_question,
     parse_answer_for_field,
     presence_calculator,
+    topic_classifier,
 )
 from lib.model_provider import ModelProviderChatModel, ModelProviderEmbeddings
 
@@ -67,6 +69,13 @@ class AgentState(TypedDict):
     task_packet: Optional[dict]
     retrieved_chunks: list[dict]
     profile_patch: Optional[dict]   # extracted by controller; emitted as SSE
+    # Tavily-related fields
+    freshness_requested: bool
+    topic: str                          # "DTA_COUNTRY_LIST" | "PUBLIC_RULING_UPDATE" | "FILING_DEADLINE_CHANGE" | "OTHER"
+    max_qdrant_score: float
+    tavily_triggered: bool
+    tavily_reason: Optional[str]        # "freshnessRequested" | "retrievalFailed" | "both" | null
+    tavily_results: list[dict]
 
 
 # ── Answer node system prompt ─────────────────────────────────────────────────
@@ -166,6 +175,10 @@ def controller_node(state: AgentState) -> dict:
     # 1. Classify intent
     intent = intent_classifier(user_msg)["intent"]
 
+    # Classify topic and freshness (deterministic; no LLM)
+    freshness = detect_freshness(user_msg)
+    topic = topic_classifier(user_msg)["topic"]
+
     # 2. Find next open question
     nq_result = next_question(profile, skipped)
     next_q = nq_result.get("nextQuestion")
@@ -237,33 +250,51 @@ def controller_node(state: AgentState) -> dict:
         "suggestedForm": suggested_form,
     }
 
+    # Log Tavily decision inputs (controller computes freshness + topic; actual trigger is post-retrieve)
+    print(
+        f"[CONTROLLER] intent={intent} "
+        f"topic={topic} "
+        f"freshnessRequested={freshness} "
+        f"retrievalQuery={'yes' if retrieval_query else 'no'}"
+    )
+
     return {
         "task_packet": task_packet,
         "profile": profile,
         "skipped_field_paths": skipped,
         "profile_patch": profile_patch,
         "retrieved_chunks": [],
+        "freshness_requested": freshness,
+        "topic": topic,
+        "tavily_triggered": False,
+        "tavily_reason": None,
+        "tavily_results": [],
     }
 
 
 # ── Retrieve node ─────────────────────────────────────────────────────────────
 
+MIN_SCORE = 0.25  # Minimum Qdrant relevance score to consider retrieval successful
+
+
 async def retrieve_node(state: AgentState) -> dict:
     task_packet = state.get("task_packet") or {}
     query = task_packet.get("retrievalQuery")
     if not query:
-        return {"retrieved_chunks": []}
+        return {"retrieved_chunks": [], "max_qdrant_score": 0.0}
 
     vs = _get_vector_store()
-    retriever = vs.as_retriever(search_kwargs={"k": 5})
     try:
-        docs = await retriever.ainvoke(query)
+        docs_and_scores = await asyncio.to_thread(
+            vs.similarity_search_with_score, query, k=5
+        )
     except Exception as exc:
         print(f"[RETRIEVE] Error: {exc}")
-        return {"retrieved_chunks": []}
+        return {"retrieved_chunks": [], "max_qdrant_score": 0.0}
 
     chunks = []
-    for doc in docs:
+    scores = []
+    for doc, score in docs_and_scores:
         meta = doc.metadata
         chunks.append({
             "chunkId": meta.get("chunk_id", str(uuid.uuid4())),
@@ -271,8 +302,72 @@ async def retrieve_node(state: AgentState) -> dict:
             "sectionRef": meta.get("reference", ""),
             "sourceTitle": meta.get("title", ""),
             "sourceUrl": meta.get("url", ""),
+            "score": float(score),
         })
-    return {"retrieved_chunks": chunks}
+        scores.append(float(score))
+
+    max_score = max(scores) if scores else 0.0
+
+    # Log retrieval outcome
+    print(
+        f"[RETRIEVE] maxQdrantScore={max_score:.4f} "
+        f"chunkCount={len(chunks)} "
+        f"topic={state.get('topic', 'OTHER')} "
+        f"freshnessRequested={state.get('freshness_requested', False)}"
+    )
+
+    return {"retrieved_chunks": chunks, "max_qdrant_score": max_score}
+
+
+# ── Tavily lookup node ────────────────────────────────────────────────────────
+
+from lib.tavily_tool import official_web_lookup, ALLOWED_TOPICS
+
+
+async def tavily_lookup_node(state: AgentState) -> dict:
+    """Call official_web_lookup and store results. Triggered only by controller routing."""
+    messages = state["messages"]
+    topic = state.get("topic", "OTHER")
+    freshness = state.get("freshness_requested", False)
+    max_score = state.get("max_qdrant_score", 0.0)
+
+    # Determine reason
+    retrieval_failed = max_score < MIN_SCORE
+    if freshness and retrieval_failed:
+        reason = "both"
+    elif freshness:
+        reason = "freshnessRequested"
+    else:
+        reason = "retrievalFailed"
+
+    # Get the user's last message as the Tavily query
+    last_human = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+    raw_content = last_human.content if last_human else ""
+    query = raw_content if isinstance(raw_content, str) else " ".join(
+        p.get("text", "") if isinstance(p, dict) else str(p) for p in raw_content
+    )
+
+    tavily_results: list[dict] = []
+    try:
+        result = await asyncio.to_thread(official_web_lookup, query=query, topic=topic)
+        tavily_results = result.get("results") or []
+    except Exception as exc:
+        print(f"[TAVILY] Error: {exc}")
+
+    # Logging
+    print(
+        f"[TAVILY] tavily_triggered=True "
+        f"tavily_reason={reason} "
+        f"topic={topic} "
+        f"maxQdrantScore={max_score:.4f} "
+        f"tavilyResultCount={len(tavily_results)}"
+    )
+
+    return {
+        "tavily_triggered": True,
+        "tavily_reason": reason,
+        "tavily_results": tavily_results,
+    }
 
 
 # ── Answer node ───────────────────────────────────────────────────────────────
@@ -310,6 +405,31 @@ async def answer_node(state: AgentState) -> dict:
             for c in chunks
         ]
         context_parts.append(f"<retrieved_context>\n{'---'.join(chunk_texts)}\n</retrieved_context>")
+
+    tavily_results = state.get("tavily_results") or []
+    if tavily_results:
+        lines = ["⚡ Freshness note (from official LHDN pages — verify details directly):"]
+        for r in tavily_results[:3]:  # top 3 findings
+            title = r.get("title", "").strip()
+            url = r.get("url", "").strip()
+            snippet = r.get("snippet", "").strip()[:200]  # truncate long snippets
+            date_str = r.get("publishedDate", "")
+            line_parts = [f"- {title}"]
+            if snippet:
+                line_parts.append(f"  {snippet}")
+            if url:
+                line_parts.append(f"  Source: {url}")
+            if date_str:
+                line_parts.append(f"  Date: {date_str}")
+            lines.append("\n".join(line_parts))
+        context_parts.append(
+            f"<freshness_addendum>\n"
+            + "\n\n".join(lines)
+            + "\n\nIMPORTANT: Use Tavily findings ONLY to flag potential updates. "
+              "Do not invent new rules from snippets. If content is unclear, say: "
+              "'I can't confirm the details from the snippet alone; please verify on the LHDN page or consult an agent.'"
+            + "\n</freshness_addendum>"
+        )
 
     suggested_form = task_packet.get("suggestedForm") or {}
     if suggested_form.get("decidable") and suggested_form.get("form"):
@@ -396,6 +516,18 @@ def _should_retrieve(state: AgentState) -> str:
     return "retrieve" if tp.get("retrievalQuery") else "answer"
 
 
+def _should_tavily(state: AgentState) -> str:
+    """After retrieval: decide whether to run Tavily fallback."""
+    freshness = state.get("freshness_requested", False)
+    max_score = state.get("max_qdrant_score", 0.0)
+    topic = state.get("topic", "OTHER")
+    retrieval_failed = max_score < MIN_SCORE
+
+    if (freshness or retrieval_failed) and topic in ALLOWED_TOPICS:
+        return "tavily_lookup"
+    return "answer"
+
+
 # ── Graph assembly ────────────────────────────────────────────────────────────
 
 _graph = None
@@ -425,13 +557,16 @@ async def get_graph():
             builder = StateGraph(AgentState)
             builder.add_node("controller", controller_node)
             builder.add_node("retrieve", retrieve_node)
+            builder.add_node("tavily_lookup", tavily_lookup_node)
             builder.add_node("answer", answer_node)
             builder.add_node("critic", critic_node)
 
             builder.set_entry_point("controller")
             builder.add_conditional_edges("controller", _should_retrieve,
                                           {"retrieve": "retrieve", "answer": "answer"})
-            builder.add_edge("retrieve", "answer")
+            builder.add_conditional_edges("retrieve", _should_tavily,
+                                          {"tavily_lookup": "tavily_lookup", "answer": "answer"})
+            builder.add_edge("tavily_lookup", "answer")
             builder.add_edge("answer", "critic")
             builder.add_edge("critic", END)
 

@@ -442,3 +442,66 @@ def test_no_trips_but_income():
     result = consistency_checker(profile)
     codes = [f["code"] for f in result["risk_flags"]]
     assert "NO_TRIPS_BUT_INCOME_DECLARED" in codes
+
+
+# ── topic_classifier ──────────────────────────────────────────────────────────
+
+from lib.deterministic_tools import topic_classifier, freshness_requested
+
+
+def test_topic_dta_country_list():
+    assert topic_classifier("Which countries have a DTA with Malaysia?")["topic"] == "DTA_COUNTRY_LIST"
+
+def test_topic_dta_list_keyword():
+    assert topic_classifier("Show me the DTA list")["topic"] == "DTA_COUNTRY_LIST"
+
+def test_topic_double_tax_agreement():
+    assert topic_classifier("Is there a double tax agreement with Germany?")["topic"] == "DTA_COUNTRY_LIST"
+
+def test_topic_public_ruling_update():
+    assert topic_classifier("Has the public ruling on FSI been amended?")["topic"] == "PUBLIC_RULING_UPDATE"
+
+def test_topic_pr_keyword():
+    assert topic_classifier("What's the latest PR on employment income?")["topic"] == "PUBLIC_RULING_UPDATE"
+
+def test_topic_guideline_keyword():
+    assert topic_classifier("Are there updated guidelines for contractors?")["topic"] == "PUBLIC_RULING_UPDATE"
+
+def test_topic_filing_deadline():
+    assert topic_classifier("What is the deadline for Form BE?")["topic"] == "FILING_DEADLINE_CHANGE"
+
+def test_topic_due_date():
+    assert topic_classifier("When is the due date for filing?")["topic"] == "FILING_DEADLINE_CHANGE"
+
+def test_topic_other():
+    assert topic_classifier("How does the 183-day rule work?")["topic"] == "OTHER"
+
+def test_topic_case_insensitive():
+    assert topic_classifier("what is the dta list?")["topic"] == "DTA_COUNTRY_LIST"
+
+
+# ── freshness_requested ────────────────────────────────────────────────────────
+
+def test_freshness_has_this_changed():
+    assert freshness_requested("Has this changed in 2026?") is True
+
+def test_freshness_latest_pr():
+    assert freshness_requested("What's the latest PR?") is True
+
+def test_freshness_still_valid():
+    assert freshness_requested("Is this still valid in 2026?") is True
+
+def test_freshness_updated():
+    assert freshness_requested("Has it been updated?") is True
+
+def test_freshness_most_recent():
+    assert freshness_requested("What is the most recent ruling?") is True
+
+def test_freshness_current():
+    assert freshness_requested("Is that the current rule?") is True
+
+def test_freshness_not_triggered():
+    assert freshness_requested("How does the 183-day rule work?") is False
+
+def test_freshness_case_insensitive():
+    assert freshness_requested("LATEST ruling on DTA?") is True

@@ -71,6 +71,13 @@ async def chat(payload: ChatRequest):
         "task_packet": None,
         "retrieved_chunks": [],
         "profile_patch": None,
+        # Tavily-related
+        "freshness_requested": False,
+        "topic": "OTHER",
+        "max_qdrant_score": 0.0,
+        "tavily_triggered": False,
+        "tavily_reason": None,
+        "tavily_results": [],
     }
 
     async def stream():

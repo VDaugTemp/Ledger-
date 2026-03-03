@@ -862,3 +862,48 @@ def _parse_citizenships(message: str) -> ParseResult:
         return {"patch": {"advisorContext": {"citizenships": codes}}, "confidenceTier": "high"}
     return {"patch": {}, "confidenceTier": "low",
             "needsClarification": "What citizenship(s) do you hold? Use country codes (e.g. GB, US, MY)"}
+
+
+# ── Topic classifier ──────────────────────────────────────────────────────────
+
+_DTA_RE = re.compile(
+    r"\b(DTA\b|treaty\s+list|which\s+countries|double\s+tax\s+(agreement|treaty)|DTA\s+list|countries.{0,30}(DTA|treaty))",
+    re.IGNORECASE,
+)
+_PR_RE = re.compile(
+    r"\b(PR|public\s+ruling|guidelines?|amended|replaced|updated\s+ruling)\b",
+    re.IGNORECASE,
+)
+_FILING_RE = re.compile(
+    r"\b(deadline|due\s+date|filing\s+date|Form\s+BE|Form\s+B\b|Form\s+M\b|extension)\b",
+    re.IGNORECASE,
+)
+
+
+def topic_classifier(message: str) -> dict:
+    """Deterministic topic classifier. No LLM.
+
+    Returns: { "topic": "DTA_COUNTRY_LIST" | "PUBLIC_RULING_UPDATE" | "FILING_DEADLINE_CHANGE" | "OTHER" }
+    """
+    if _DTA_RE.search(message):
+        return {"topic": "DTA_COUNTRY_LIST"}
+    if _PR_RE.search(message):
+        return {"topic": "PUBLIC_RULING_UPDATE"}
+    if _FILING_RE.search(message):
+        return {"topic": "FILING_DEADLINE_CHANGE"}
+    return {"topic": "OTHER"}
+
+
+# ── Freshness detector ────────────────────────────────────────────────────────
+
+_FRESHNESS_RE = re.compile(
+    r"\b(has\s+this\s+changed|latest\s+(PR|ruling|guideline|DTA|list|rule)|"
+    r"still\s+valid|most\s+recent|current\s+rule|updated|has\s+it\s+been|"
+    r"any\s+changes?|recently\s+(changed|updated|amended))\b",
+    re.IGNORECASE,
+)
+
+
+def freshness_requested(message: str) -> bool:
+    """Return True if user message signals a request for fresh/current information."""
+    return bool(_FRESHNESS_RE.search(message))

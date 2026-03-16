@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "validators": {
+    "guardrails/detect_jailbreak": {
+      "import_path": "guardrails_grhub_detect_jailbreak",
+      "exports": [
+        "DetectJailbreak"
+      ],
+      "installed_at": "2026-03-16T08:59:37.063263+00:00",
+      "package_name": "guardrails-grhub-detect-jailbreak"
+    }
+  }
+}

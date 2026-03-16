@@ -96,9 +96,17 @@ def _is_overload_error(e: Exception) -> bool:
 class AnthropicChatProvider:
     """Anthropic chat. Vendor SDK imported lazily so it's only needed at call time."""
 
-    def __init__(self, api_key: str | None = None, default_model: str = "claude-3-5-haiku-20241022"):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        default_model: str = "claude-3-5-haiku-20241022",
+        default_temperature: float = 0.0,
+        default_max_tokens: int = 4096,
+    ):
         self._api_key = api_key
         self._default_model = default_model
+        self.default_temperature = default_temperature
+        self.default_max_tokens = default_max_tokens
         self._client: Any = None
 
     def _get_client(self) -> Any:
@@ -243,6 +251,129 @@ class AnthropicChatProvider:
             if isinstance(e, ModelProviderError):
                 raise
             raise _normalize_anthropic_error(e)
+
+
+class FireworksChatProvider:
+    """Fireworks.ai chat via OpenAI-compatible API. Used for 'private' mode."""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        default_model: str = "accounts/fireworks/models/qwen2p5-vl-32b-instruct",
+        base_url: str = "https://api.fireworks.ai/inference/v1",
+        default_temperature: float = 0.0,
+        default_max_tokens: int = 4096,
+    ):
+        self._api_key = api_key
+        self._default_model = default_model
+        # Strip trailing /chat/completions if included — AsyncOpenAI appends that itself
+        self._base_url = base_url.rstrip("/").removesuffix("/chat/completions")
+        self.default_temperature = default_temperature
+        self.default_max_tokens = default_max_tokens
+        self._client: Any = None
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            from openai import AsyncOpenAI
+            self._client = AsyncOpenAI(
+                api_key=self._api_key,
+                base_url=self._base_url,
+            )
+        return self._client
+
+    async def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
+        stream: bool = False,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: dict[str, Any] | str | None = None,
+        response_format: dict[str, Any] | None = None,
+        system: str | None = None,
+    ) -> "ChatResult | AsyncIterator[StreamChunk]":
+        target_model = model or self._default_model
+        client = self._get_client()
+
+        # Convert to OpenAI message format; inject system if provided
+        oai_messages: list[dict[str, Any]] = []
+        if system:
+            oai_messages.append({"role": "system", "content": system})
+        for m in messages:
+            if m.role == "system":
+                # Already handled above; skip duplicates
+                continue
+            oai_messages.append({"role": m.role, "content": m.content})
+
+        kwargs: dict[str, Any] = {
+            "model": target_model,
+            "messages": oai_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": stream,
+        }
+        if tools:
+            kwargs["tools"] = tools
+        if tool_choice is not None:
+            kwargs["tool_choice"] = tool_choice
+        if response_format is not None:
+            kwargs["response_format"] = response_format
+
+        start = time.perf_counter()
+        try:
+            if stream:
+                return self._stream_chat(client, kwargs, target_model, start)
+            response = await client.chat.completions.create(**kwargs)
+            latency_ms = (time.perf_counter() - start) * 1000
+            content = response.choices[0].message.content or "" if response.choices else ""
+            u = Usage(
+                provider="fireworks",
+                model=target_model,
+                prompt_tokens=getattr(response.usage, "prompt_tokens", 0) or 0,
+                completion_tokens=getattr(response.usage, "completion_tokens", 0) or 0,
+                total_tokens=getattr(response.usage, "total_tokens", 0) or 0,
+                latency_ms=latency_ms,
+                request_id=getattr(response, "id", None),
+            )
+            return ChatResult(content=content, usage=u, finish_reason="stop")
+        except Exception as e:
+            if isinstance(e, ModelProviderError):
+                raise
+            raise _normalize_openai_error(e)
+
+    async def _stream_chat(
+        self,
+        client: Any,
+        kwargs: dict[str, Any],
+        model: str,
+        start: float,
+    ) -> AsyncIterator[StreamChunk]:
+        try:
+            stream = await client.chat.completions.create(**kwargs)
+            async for chunk in stream:
+                choice = chunk.choices[0] if chunk.choices else None
+                if choice is None:
+                    continue
+                delta_content = getattr(choice.delta, "content", None)
+                if delta_content:
+                    yield StreamChunk(content_delta=delta_content)
+                if getattr(choice, "finish_reason", None) == "stop":
+                    latency_ms = (time.perf_counter() - start) * 1000
+                    u = Usage(
+                        provider="fireworks",
+                        model=model,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        total_tokens=0,
+                        latency_ms=latency_ms,
+                    )
+                    yield StreamChunk(content_delta="", usage=u, finish_reason="stop")
+        except Exception as e:
+            if isinstance(e, ModelProviderError):
+                raise
+            raise _normalize_openai_error(e)
 
 
 class OpenAIProvider:

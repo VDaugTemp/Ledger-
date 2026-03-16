@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
+import type { UIMessage } from "ai";
 import {
   Conversation,
   ConversationContent,
@@ -21,7 +22,13 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { SparklesIcon, PlusIcon, XIcon } from "lucide-react";
+import { SparklesIcon, AlertCircleIcon, PlusIcon, HistoryIcon, ZapIcon, LockIcon } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/components/AuthProvider";
 import { useUserProfile } from "@/hooks/useUserProfile";
 import { generateOpenQuestions } from "@/lib/openQuestions";
@@ -29,6 +36,7 @@ import type { Profile, OpenQuestion } from "@/lib/types";
 import { NextStepAction } from "@/components/NextStepAction";
 import { AdvisorSummaryModal } from "@/components/AdvisorSummaryModal";
 import { downloadAdvisorPdf } from "@/lib/pdf-downloader";
+import { ChatHistoryDrawer } from "@/components/ChatHistoryDrawer";
 
 const springTransition = { type: "spring" as const, stiffness: 380, damping: 30 };
 const springSoft = { type: "spring" as const, stiffness: 260, damping: 24 };
@@ -52,8 +60,6 @@ const staggerItemSubtle = {
     transition: { duration: 0.35, ease: [0.22, 1, 0.36, 1] as const },
   },
 };
-
-const SESSION_KEY = "chatThreadId";
 
 const SKIP_PHRASES = ["prefer not to answer", "rather not say", "skip this", "skip"];
 
@@ -212,29 +218,17 @@ function ChatEmptyState({ onSuggestionClick }: { onSuggestionClick: (text: strin
   );
 }
 
-function getOrCreateThreadId(): string {
-  if (typeof window === "undefined") return crypto.randomUUID();
-  let id = sessionStorage.getItem(SESSION_KEY);
-  if (!id) {
-    id = crypto.randomUUID();
-    sessionStorage.setItem(SESSION_KEY, id);
-  }
-  return id;
-}
-
-/** Call when user explicitly starts a new chat. Clears session and returns new thread id. */
-function resetThreadId(): string {
-  if (typeof window !== "undefined") {
-    sessionStorage.removeItem(SESSION_KEY);
-  }
-  const newId = crypto.randomUUID();
-  if (typeof window !== "undefined") {
-    sessionStorage.setItem(SESSION_KEY, newId);
-  }
-  return newId;
-}
-
-function ChatContent({ onNewChat }: { onNewChat: () => void }) {
+function ChatContent({
+  onNewChat,
+  threadId,
+  initialMessages,
+  onHistoryOpen,
+}: {
+  onNewChat: () => void;
+  threadId: string;
+  initialMessages: UIMessage[];
+  onHistoryOpen: () => void;
+}) {
   const { user, accessToken } = useAuth();
   const { profile, userId, savePatch } = useUserProfile({
     userId: user?.userId,
@@ -244,6 +238,8 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
   // Session-only list of skipped field paths
   const [skippedFieldPaths, setSkippedFieldPaths] = useState<string[]>([]);
   const [advisorModalOpen, setAdvisorModalOpen] = useState(false);
+  const [mode, setMode] = useState<"fast" | "private">("fast");
+  const [thinkingLabel, setThinkingLabel] = useState("Thinking...");
 
   // Compute next open question reactively from profile + skipped list
   const openQuestions = useMemo(
@@ -251,8 +247,6 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
     [profile, skippedFieldPaths],
   );
   const nextQuestion: OpenQuestion | null = openQuestions[0] ?? null;
-
-  const threadId = useMemo(() => getOrCreateThreadId(), []);
 
   // Mutable body ref — DefaultChatTransport stores this object reference;
   // mutations here are visible at send time without recreating the transport.
@@ -262,6 +256,7 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
   chatBodyRef.current.skippedFieldPaths = skippedFieldPaths;
   chatBodyRef.current.todayIso = new Date().toISOString().split("T")[0];
   chatBodyRef.current.userId = userId || undefined;
+  chatBodyRef.current.mode = mode;
 
   const transport = useMemo(
     () => new DefaultChatTransport({ body: chatBodyRef.current }),
@@ -269,7 +264,7 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
     [],
   );
 
-  const { messages, sendMessage, status, stop } = useChat({ transport });
+  const { messages, sendMessage, status, stop } = useChat({ transport, messages: initialMessages });
 
   // Apply profile updates delivered as data-profile-update stream parts
   const lastProcessedRef = useRef(0);
@@ -280,6 +275,11 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
     for (const msg of newMessages) {
       if (msg.role !== "assistant") continue;
       for (const part of msg.parts) {
+        if ((part as { type: string }).type === "data-status") {
+          const s = (part as { type: string; data: { status: string } }).data.status;
+          if (s === "retrieving") setThinkingLabel("Searching knowledge base...");
+          else if (s === "answering") setThinkingLabel("Composing answer...");
+        }
         if ((part as { type: string }).type === "data-profile-update" && profile && userId) {
           const patch = (part as { type: string; data: unknown }).data as Partial<Profile>;
           // Merge trips additively: append new trips from the patch to existing ones
@@ -309,6 +309,11 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
   const isLoading = status === "submitted" || status === "streaming";
   const isThinking = status === "submitted";
   const isEmpty = messages.length === 0;
+
+  // Reset thinking label when loading finishes
+  useEffect(() => {
+    if (!isLoading) setThinkingLabel("Thinking...");
+  }, [isLoading]);
 
   const completeness = profile?.dataQuality?.completenessScore ?? 0;
   const hasAssistantMessage = messages.some((m) => m.role === "assistant");
@@ -341,7 +346,20 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
   return (
     <div className="flex flex-col h-[calc(100vh-3.5rem)]">
       {/* Top bar */}
-      <div className="flex-shrink-0 border-b border-border/30 flex items-center justify-end px-4 py-2">
+      <div className="flex-shrink-0 border-b border-border/30 flex items-center justify-between px-4 py-2">
+        <motion.button
+          type="button"
+          onClick={onHistoryOpen}
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground rounded-lg hover:bg-accent transition-colors"
+          aria-label="Open chat history"
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          transition={springSoft}
+        >
+          <HistoryIcon className="size-3.5" />
+          History
+        </motion.button>
+
         <motion.button
           type="button"
           onClick={onNewChat}
@@ -407,14 +425,6 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
             ))}
           </AnimatePresence>
 
-          <AnimatePresence mode="wait">
-            {isThinking ? (
-              <ThinkingIndicator key="thinking" label="Thinking..." />
-            ) : status === "streaming" ? (
-              <ThinkingIndicator key="responding" label="Responding..." />
-            ) : null}
-          </AnimatePresence>
-
           <AnimatePresence>
             {showAdvisorCta && !isLoading && (
               <motion.div
@@ -447,9 +457,12 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
               disabled={isLoading}
             />
             <PromptInputFooter>
-              <p className="text-[11px] text-muted-foreground/70 tracking-wide">
-                Shift + Enter for new line
-              </p>
+              <div className="flex items-center gap-3">
+                <ModeSelector mode={mode} onChange={setMode} disabled={isLoading} />
+                <p className="text-[11px] text-muted-foreground/70 tracking-wide">
+                  Shift + Enter for new line
+                </p>
+              </div>
               <PromptInputSubmit status={status} onStop={stop} />
             </PromptInputFooter>
           </PromptInput>
@@ -474,12 +487,107 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
   );
 }
 
-export default function ChatPage() {
-  const [threadId, setThreadId] = useState(() =>
-    typeof window !== "undefined" ? getOrCreateThreadId() : crypto.randomUUID(),
+// ─── ModeSelector ─────────────────────────────────────────────────────────────
+
+type ChatMode = "fast" | "private";
+
+const MODE_OPTIONS: { value: ChatMode; label: string; icon: React.ReactNode; description: string }[] = [
+  {
+    value: "fast",
+    label: "Fast",
+    icon: <ZapIcon className="size-3" />,
+    description: "Anthropic Claude",
+  },
+  {
+    value: "private",
+    label: "Private mode",
+    icon: <LockIcon className="size-3" />,
+    description: "Self-hosted model",
+  },
+];
+
+function ModeSelector({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: ChatMode;
+  onChange: (m: ChatMode) => void;
+  disabled: boolean;
+}) {
+  const current = MODE_OPTIONS.find((o) => o.value === mode) ?? MODE_OPTIONS[0];
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent border border-transparent hover:border-border/40 transition-colors disabled:opacity-40"
+          aria-label="Select chat mode"
+        >
+          {current.icon}
+          <span>{current.label}</span>
+          <span className="text-muted-foreground/50">▾</span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" side="top" className="w-48">
+        {MODE_OPTIONS.map((opt) => (
+          <DropdownMenuItem
+            key={opt.value}
+            onClick={() => onChange(opt.value)}
+            className={[
+              "flex items-start gap-2.5 px-3 py-2.5 text-xs cursor-pointer",
+              opt.value === mode ? "text-primary" : "",
+            ].join(" ")}
+          >
+            <span className="mt-0.5 shrink-0">{opt.icon}</span>
+            <div>
+              <p className="font-medium leading-tight">{opt.label}</p>
+              <p className="text-muted-foreground text-[10px] mt-0.5">{opt.description}</p>
+            </div>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
+}
+
+export default function ChatPage() {
+  const { user } = useAuth();
+  const [threadId, setThreadId] = useState(() => crypto.randomUUID());
+  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
   const handleNewChat = useCallback(() => {
-    setThreadId(resetThreadId());
+    setThreadId(crypto.randomUUID());
+    setInitialMessages([]);
   }, []);
-  return <ChatContent key={threadId} onNewChat={handleNewChat} />;
+
+  const handleSelectThread = useCallback(
+    (selectedThreadId: string, messages: UIMessage[]) => {
+      setThreadId(selectedThreadId);
+      setInitialMessages(messages);
+      setHistoryOpen(false);
+    },
+    [],
+  );
+
+  return (
+    <>
+      <ChatContent
+        key={threadId}
+        onNewChat={handleNewChat}
+        threadId={threadId}
+        initialMessages={initialMessages}
+        onHistoryOpen={() => setHistoryOpen(true)}
+      />
+      <ChatHistoryDrawer
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        userId={user?.userId}
+        onSelectThread={handleSelectThread}
+      />
+    </>
+  );
 }

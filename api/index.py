@@ -8,23 +8,81 @@ SSE events emitted:
 from __future__ import annotations
 
 import json
+import os
 import re
 import traceback
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+import redis.asyncio as aioredis
+
+from contextlib import asynccontextmanager
+
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from lib.agent import get_graph
+from langchain_core.messages import AIMessage, HumanMessage
+
+from lib.agent import get_graph, _get_vector_store
+from lib.model_provider import get_model_provider
+from lib.jailbreak_guard import is_jailbreak, warmup as jailbreak_warmup
 
 load_dotenv()
 
-app = FastAPI()
+_redis: aioredis.Redis | None = None
+
+
+async def _get_redis() -> aioredis.Redis:
+    global _redis
+    if _redis is None:
+        url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        if not url.startswith(("redis://", "rediss://", "unix://")):
+            url = "redis://" + url
+        _redis = aioredis.from_url(url, decode_responses=True)
+    return _redis
+
+
+_THREAD_TTL_SECONDS = 864_000  # 10 days
+
+
+async def _save_thread_metadata(user_id: str, thread_id: str, first_message: str) -> None:
+    """Prepend thread metadata to threads:{user_id} Redis list. Sets TTL on first write."""
+    r = await _get_redis()
+    key = f"threads:{user_id}"
+    entry = json.dumps(
+        {
+            "threadId": thread_id,
+            "title": first_message[:60].strip(),
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    is_new = not await r.exists(key)
+    # Prepend: LPUSH + trim to prevent unbounded growth (cap at 100 threads)
+    await r.lpush(key, entry)
+    await r.ltrim(key, 0, 99)
+    if is_new:
+        await r.expire(key, _THREAD_TTL_SECONDS)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("[STARTUP] Warming up singletons…")
+    try:
+        await get_graph()
+        _get_vector_store()
+        get_model_provider()
+        jailbreak_warmup()
+        print("[STARTUP] Warmup complete")
+    except Exception as exc:
+        print(f"[STARTUP] Warmup error (non-fatal): {exc}")
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -56,6 +114,7 @@ class ChatRequest(BaseModel):
     # Legacy (backward compat — still accepted but not used if profile is present)
     profile_context: str | None = None
     user_id: str | None = None
+    mode: str = "fast"  # "fast" | "private"
 
 
 class SummaryRequest(BaseModel):
@@ -67,8 +126,55 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/app/chat/threads")
+async def list_threads(user_id: str):
+    """Return thread metadata list for a user (most recent first)."""
+    r = await _get_redis()
+    key = f"threads:{user_id}"
+    raw_entries = await r.lrange(key, 0, -1)
+    threads = []
+    for raw in raw_entries:
+        try:
+            threads.append(json.loads(raw))
+        except json.JSONDecodeError:
+            continue
+    return {"threads": threads}
+
+
+@app.get("/app/chat/threads/{thread_id}/messages")
+async def get_thread_messages(thread_id: str):
+    """Return messages for a thread from LangGraph checkpoint state."""
+    graph = await get_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    snapshot = await graph.aget_state(config)
+
+    checkpoint_id = snapshot.config.get("configurable", {}).get("checkpoint_id")
+    if checkpoint_id is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+    messages = []
+    for msg in snapshot.values.get("messages", []):
+        if isinstance(msg, HumanMessage):
+            messages.append({"role": "user", "content": msg.content if isinstance(msg.content, str) else ""})
+        elif isinstance(msg, AIMessage):
+            messages.append({"role": "assistant", "content": msg.content if isinstance(msg.content, str) else ""})
+
+    return {"messages": messages}
+
+
 @app.post("/app/chat")
 async def chat(payload: ChatRequest):
+    if await is_jailbreak(payload.input):
+        print(f"[JAILBREAK] Blocked input from user_id={payload.user_id!r}")
+
+        async def _blocked():
+            yield (
+                f"event: error\n"
+                f"data: {json.dumps({'message': 'Your message was flagged by our safety filter. Please rephrase your question.'})}\n\n"
+            )
+
+        return StreamingResponse(_blocked(), media_type="text/event-stream")
+
     graph = await get_graph()
 
     config = payload.config or {}
@@ -96,7 +202,16 @@ async def chat(payload: ChatRequest):
         "tavily_triggered": False,
         "tavily_reason": None,
         "tavily_results": [],
+        "mode": payload.mode,
     }
+
+    # Auto-save thread metadata on first turn
+    thread_id = configurable.get("thread_id", "")
+    if payload.user_id and thread_id:
+        snapshot = await graph.aget_state(config)
+        is_new_thread = snapshot.config.get("configurable", {}).get("checkpoint_id") is None
+        if is_new_thread:
+            await _save_thread_metadata(payload.user_id, thread_id, payload.input)
 
     async def stream():
         text_started = False
@@ -114,6 +229,11 @@ async def chat(payload: ChatRequest):
                             f"event: profile_update\n"
                             f"data: {json.dumps(patch, default=str)}\n\n"
                         )
+                    yield f"event: status\ndata: {json.dumps({'status': 'retrieving'})}\n\n"
+
+                # Signal that retrieval is complete and answering is starting
+                elif etype == "on_chain_end" and ename == "retrieve":
+                    yield f"event: status\ndata: {json.dumps({'status': 'answering'})}\n\n"
 
                 # Token streaming from LLM (fires during answer node)
                 elif etype == "on_chat_model_stream":
@@ -187,6 +307,7 @@ async def chat_eval(
         "tavily_triggered": False,
         "tavily_reason": None,
         "tavily_results": [],
+        "mode": payload.mode,
     }
 
     try:

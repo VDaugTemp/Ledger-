@@ -92,7 +92,7 @@ Rules:
 - Cite document names, section numbers, or thresholds when stating rules (e.g. "ITA s7(1)(a)", "PR 11/2017", "Schedule 6").
 - Answer the user's question FIRST.
 - If your context contains an [INSTRUCTION] block with a follow-up question, ask that question word for word at the end of your response — preceded by one short neutral bridge sentence such as "To understand how these rules may apply in your situation, it would help to know:". Do not output the [INSTRUCTION] block itself.
-- Ask AT MOST ONE question per response.
+- Ask AT MOST ONE question per response. When an [INSTRUCTION] question is present, do NOT include any other question, call-to-action, or request for the user to provide profile data anywhere else in your response body.
 - Keep responses concise and structured. No filler, padding, or repetition.
 
 Faithfulness rule (critical):
@@ -114,11 +114,12 @@ Banned phrases (replace with softer language):
 
 # ── Controller node ───────────────────────────────────────────────────────────
 
-def _build_profile_summary(profile: dict, decision_map: dict) -> str:
+def _build_profile_summary(profile: dict, decision_map: dict, today_iso: str | None = None) -> str:
     income = profile.get("incomeTypes") or {}
     active = [k for k, v in income.items() if v]
     trips = (profile.get("presence") or {}).get("trips") or []
-    year = profile.get("assessmentYear") or 2025
+    default_year = int(today_iso[:4]) if today_iso else 2025
+    year = profile.get("assessmentYear") or default_year
     jurisdiction = profile.get("jurisdiction") or "MY"
 
     lines = [
@@ -128,8 +129,12 @@ def _build_profile_summary(profile: dict, decision_map: dict) -> str:
     ]
 
     if trips:
+        for t in trips:
+            entry = t.get("entryDate", "unknown")
+            exit_ = t.get("exitDate", "unknown")
+            lines.append(f"  Trip: {entry} → {exit_}")
         calc = presence_calculator(trips, year)
-        lines.append(f"Days in jurisdiction: {calc['daysInYear']}")
+        lines.append(f"Days in jurisdiction ({year}): {calc['daysInYear']}")
         if calc["near183"]:
             lines.append("⚠️ At/above 183 days (likely tax resident)")
         elif calc["near60"]:
@@ -146,10 +151,11 @@ def _build_profile_summary(profile: dict, decision_map: dict) -> str:
     return "\n".join(lines)
 
 
-def _build_flags(profile: dict, decision_map: dict) -> list[dict]:
+def _build_flags(profile: dict, decision_map: dict, today_iso: str | None = None) -> list[dict]:
     flags = []
     trips = (profile.get("presence") or {}).get("trips") or []
-    year = profile.get("assessmentYear") or 2025
+    default_year = int(today_iso[:4]) if today_iso else 2025
+    year = profile.get("assessmentYear") or default_year
     days_in_year = 0
     if trips:
         calc = presence_calculator(trips, year)
@@ -236,12 +242,13 @@ def controller_node(state: AgentState) -> dict:
 
     # 4. Build TaskPacket
     decision_map = nq_result.get("decisionMap") or {}
-    flags = _build_flags(profile, dict(decision_map))
-    profile_summary = _build_profile_summary(profile, dict(decision_map))
+    flags = _build_flags(profile, dict(decision_map), today_iso)
+    profile_summary = _build_profile_summary(profile, dict(decision_map), today_iso)
 
     # Compute suggested filing form
     trips = (profile.get("presence") or {}).get("trips") or []
-    _year = profile.get("assessmentYear") or 2025
+    default_year = int(today_iso[:4]) if today_iso else 2025
+    _year = profile.get("assessmentYear") or default_year
     _days = presence_calculator(trips, _year)["daysInYear"] if trips else 0
     suggested_form = filing_form_selector(profile, _days)
 
@@ -492,7 +499,8 @@ async def answer_node(state: AgentState) -> dict:
     if next_q:
         context_parts.append(
             f"[INSTRUCTION — do not repeat this block in your response]\n"
-            f"End your response with this question, word for word:\n"
+            f"End your response with ONLY this question, word for word. "
+            f"Do not ask any other question or include any call-to-action for profile data anywhere else in your response:\n"
             f"{next_q['question']}"
         )
 

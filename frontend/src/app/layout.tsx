@@ -6,7 +6,7 @@ import { AuthProvider } from "@/components/AuthProvider";
 import { NavBar } from "@/components/NavBar";
 
 export const metadata: Metadata = {
-  title: "Ledger — AI Tax Advisor",
+  title: "Tax Compass — AI Tax Advisor",
   description:
     "Intelligent tax and accounting guidance for digital nomads and remote professionals.",
 };

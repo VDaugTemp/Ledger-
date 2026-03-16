@@ -73,7 +73,7 @@ function buildCatalogue(year: number): CatalogueEntry[] {
       question: `Did you physically perform any employment work while you were in ${JURISDICTION_LABEL}?`,
       whyNeeded: "Physical work in-country triggers local employment source income rules.",
       skipAllowed: true,
-      condition: (p) => p.incomeTypes.employment === true,
+      condition: (p) => p.incomeTypes?.employment === true,
     },
     {
       id: "employment.foreignEmployer",
@@ -84,7 +84,7 @@ function buildCatalogue(year: number): CatalogueEntry[] {
       question: `Was your employer foreign (not a ${JURISDICTION_LABEL} employer)?`,
       whyNeeded: "Foreign employer status affects local source income determination.",
       skipAllowed: true,
-      condition: (p) => p.incomeTypes.employment === true,
+      condition: (p) => p.incomeTypes?.employment === true,
     },
     {
       id: "employment.salaryBorneByLocalEntity",
@@ -108,7 +108,7 @@ function buildCatalogue(year: number): CatalogueEntry[] {
       question: `What passive income did you have? (Dividends / Interest / Rental / Other)`,
       whyNeeded: "Type of passive income determines remittance and source rules.",
       skipAllowed: true,
-      condition: (p) => p.incomeTypes.passive === true,
+      condition: (p) => p.incomeTypes?.passive === true,
     },
     {
       id: "passive.remittedOrReceivedInJurisdiction",
@@ -119,7 +119,7 @@ function buildCatalogue(year: number): CatalogueEntry[] {
       question: `Was any of that passive income received or remitted into ${JURISDICTION_LABEL}?`,
       whyNeeded: "Remittance into jurisdiction may trigger taxable event.",
       skipAllowed: true,
-      condition: (p) => p.incomeTypes.passive === true,
+      condition: (p) => p.incomeTypes?.passive === true,
     },
 
     // ── Conditional on contractor income ──────────────────────────────────
@@ -132,7 +132,7 @@ function buildCatalogue(year: number): CatalogueEntry[] {
       question: `Did you physically perform any contractor/freelance services while you were in ${JURISDICTION_LABEL}?`,
       whyNeeded: "Physical service delivery in-country creates a local source income issue.",
       skipAllowed: true,
-      condition: (p) => p.incomeTypes.contractor === true,
+      condition: (p) => p.incomeTypes?.contractor === true,
     },
     {
       id: "contractor.invoicedLocalEntity",
@@ -143,7 +143,7 @@ function buildCatalogue(year: number): CatalogueEntry[] {
       question: `Were any invoices issued to a ${JURISDICTION_LABEL} entity?`,
       whyNeeded: "Invoicing local entities can indicate a local source of income.",
       skipAllowed: true,
-      condition: (p) => p.incomeTypes.contractor === true,
+      condition: (p) => p.incomeTypes?.contractor === true,
     },
 
     // ── Tier 3: Advisor context — always in catalogue ──────────────────────
@@ -288,7 +288,7 @@ function getFieldValue(profile: Profile, fieldPath: string): unknown {
  */
 function isIncomeTypesMissing(profile: Profile): boolean {
   const { incomeTypes } = profile;
-  return !Object.values(incomeTypes).some(Boolean);
+  return !incomeTypes || !Object.values(incomeTypes).some(Boolean);
 }
 
 /**
@@ -325,8 +325,9 @@ function isFieldMissing(profile: Profile, fieldPath: string): boolean {
   switch (fieldPath) {
     case "presence.trips": {
       const trips = profile.presence?.trips;
-      if (trips.length === 0) return true;
-      return trips.some((t) => !t.entryDate || !t.exitDate);
+      if (!trips || trips.length === 0) return true;
+      // Answered if at least one complete trip (both dates present) exists
+      return !trips.some((t) => t.entryDate && t.exitDate);
     }
     case "incomeTypes":
       return isIncomeTypesMissing(profile);

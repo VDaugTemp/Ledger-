@@ -11,20 +11,20 @@ export function NavBar() {
   return (
     <header className="sticky top-0 z-50 border-b border-border/40 bg-background/95 backdrop-blur-xl">
       <nav className="max-w-4xl mx-auto px-5 h-14 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2.5 group" aria-label="Ledger home">
+        <Link href="/" className="flex items-center gap-2.5 group" aria-label="Tax Compass home">
           <div className="size-6 rounded-sm bg-primary/12 border border-primary/25 flex items-center justify-center transition-colors group-hover:bg-primary/20">
             <span
               className="text-primary font-semibold leading-none"
-              style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: "14px" }}
+              style={{ fontFamily: "'Cormorant Garamond', serif", fontSize: "10px" }}
             >
-              L
-            </span>
+              TC
+</span>
           </div>
           <span
             className="text-sm font-medium tracking-[0.06em] text-foreground/90 group-hover:text-foreground transition-colors"
             style={{ fontFamily: "'DM Sans', sans-serif" }}
           >
-            LEDGER
+            TAX COMPASS
           </span>
         </Link>
 
@@ -46,6 +46,12 @@ export function NavBar() {
               >
                 Profile
               </Link>
+              <Link
+                href="/about"
+                className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-accent tracking-wide"
+              >
+                About
+              </Link>
               <button
                 type="button"
                 onClick={signOut}
@@ -55,12 +61,20 @@ export function NavBar() {
               </button>
             </>
           ) : (
-            <Link
-              href="/auth/sign-in"
-              className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-accent tracking-wide"
-            >
-              Sign in
-            </Link>
+            <>
+              <Link
+                href="/about"
+                className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-accent tracking-wide"
+              >
+                About
+              </Link>
+              <Link
+                href="/auth/sign-in"
+                className="px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-accent tracking-wide"
+              >
+                Sign in
+              </Link>
+            </>
           )}
           <ThemeToggle />
         </div>

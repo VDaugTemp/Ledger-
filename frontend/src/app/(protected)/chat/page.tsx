@@ -1,8 +1,8 @@
 "use client";
 
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Conversation,
   ConversationContent,
@@ -21,11 +21,14 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { SparklesIcon, AlertCircleIcon, PlusIcon, XIcon } from "lucide-react";
+import { SparklesIcon, PlusIcon, XIcon } from "lucide-react";
 import { useAuth } from "@/components/AuthProvider";
 import { useUserProfile } from "@/hooks/useUserProfile";
-import { generateOpenQuestions, applyProfilePatch } from "@/lib/openQuestions";
+import { generateOpenQuestions } from "@/lib/openQuestions";
 import type { Profile, OpenQuestion } from "@/lib/types";
+import { NextStepAction } from "@/components/NextStepAction";
+import { AdvisorSummaryModal } from "@/components/AdvisorSummaryModal";
+import { downloadAdvisorPdf } from "@/lib/pdf-downloader";
 
 const springTransition = { type: "spring" as const, stiffness: 380, damping: 30 };
 const springSoft = { type: "spring" as const, stiffness: 260, damping: 24 };
@@ -62,73 +65,43 @@ const SUGGESTED_QUESTIONS = [
   "How does residency status affect my tax rate?",
 ];
 
-function AssistantAvatar() {
+function AssistantAvatar({ streaming = false }: { streaming?: boolean }) {
+  const reduced = useReducedMotion();
+  const active = streaming && !reduced;
   return (
-    <div className="size-6 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-      <SparklesIcon className="size-3 text-primary" />
+    <div className="relative flex-shrink-0 mt-0.5 size-6">
+      {/* Glow ring */}
+      {active && (
+        <motion.div
+          className="absolute inset-0 rounded-md bg-primary blur-[6px]"
+          animate={{ opacity: [0, 0.45, 0], scale: [0.6, 1.5, 0.6] }}
+          transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
+          aria-hidden
+        />
+      )}
+      <div className="relative size-6 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center">
+        <motion.div
+          animate={active ? { scale: [1, 1.2, 1], opacity: [0.75, 1, 0.75] } : {}}
+          transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
+        >
+          <SparklesIcon className="size-3 text-primary" />
+        </motion.div>
+      </div>
     </div>
   );
 }
 
-function ThinkingIndicator() {
+function ThinkingIndicator({ label }: { label: string }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -4 }}
       transition={springSoft}
-      className="flex items-start gap-3 w-full max-w-3xl mx-auto px-4"
+      className="flex items-center gap-2.5 w-full max-w-3xl mx-auto px-4 py-1"
     >
-      <AssistantAvatar />
-      <div className="flex items-center gap-1.5 pt-1.5 text-muted-foreground">
-        <span className="loading-dot" />
-        <span className="loading-dot" />
-        <span className="loading-dot" />
-      </div>
-    </motion.div>
-  );
-}
-
-function StatusPill({ status }: { status: string }) {
-  const isStreaming = status === "streaming";
-  const isSubmitted = status === "submitted";
-  const isError = status === "error";
-
-  if (!isStreaming && !isSubmitted && !isError) return null;
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: -4 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -4 }}
-      transition={springSoft}
-      className={[
-        "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-medium tracking-wide",
-        isError
-          ? "bg-destructive/10 text-destructive border border-destructive/20"
-          : "bg-primary/8 text-primary/80 border border-primary/15",
-      ].join(" ")}
-    >
-      {isError ? (
-        <>
-          <AlertCircleIcon className="size-2.5" />
-          Error
-        </>
-      ) : isSubmitted ? (
-        <>
-          <span className="loading-dot size-1.5" />
-          Thinking
-        </>
-      ) : (
-        <>
-          <motion.span
-            className="size-1.5 rounded-full bg-primary/70 inline-block"
-            animate={{ opacity: [0.4, 1, 0.4] }}
-            transition={{ duration: 1.2, repeat: Infinity }}
-          />
-          Responding
-        </>
-      )}
+      <AssistantAvatar streaming />
+      <span className="text-xs text-muted-foreground/70">{label}</span>
     </motion.div>
   );
 }
@@ -270,6 +243,7 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
 
   // Session-only list of skipped field paths
   const [skippedFieldPaths, setSkippedFieldPaths] = useState<string[]>([]);
+  const [advisorModalOpen, setAdvisorModalOpen] = useState(false);
 
   // Compute next open question reactively from profile + skipped list
   const openQuestions = useMemo(
@@ -308,13 +282,24 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
       for (const part of msg.parts) {
         if ((part as { type: string }).type === "data-profile-update" && profile && userId) {
           const patch = (part as { type: string; data: unknown }).data as Partial<Profile>;
-          savePatch(
-            applyProfilePatch(profile, patch, {
-              source: "chat",
-              confidenceTier: "high",
-              timestampIso: new Date().toISOString(),
-            }),
-          ).catch(console.error);
+          // Merge trips additively: append new trips from the patch to existing ones
+          // (patch.presence.trips only contains the newly extracted trip, not the full list)
+          const patchTrips = patch.presence?.trips;
+          const effectivePatch: Partial<Profile> = patchTrips
+            ? {
+                ...patch,
+                presence: {
+                  ...patch.presence,
+                  trips: [
+                    ...(profile.presence?.trips ?? []).filter(
+                      (et) => !patchTrips.some((nt) => nt.tripId === et.tripId),
+                    ),
+                    ...patchTrips,
+                  ],
+                },
+              }
+            : patch;
+          savePatch(effectivePatch).catch(console.error);
         }
       }
     }
@@ -324,6 +309,10 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
   const isLoading = status === "submitted" || status === "streaming";
   const isThinking = status === "submitted";
   const isEmpty = messages.length === 0;
+
+  const completeness = profile?.dataQuality?.completenessScore ?? 0;
+  const hasAssistantMessage = messages.some((m) => m.role === "assistant");
+  const showAdvisorCta = completeness >= 80 && hasAssistantMessage;
 
   function isSkipMessage(text: string): boolean {
     const lower = text.toLowerCase().trim();
@@ -367,53 +356,6 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
         </motion.button>
       </div>
 
-      {/* Status bar */}
-      <AnimatePresence>
-        {(isLoading || status === "error") && (
-          <motion.div
-            key="status"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={springSoft}
-            className="border-b border-border/30 overflow-hidden"
-          >
-            <div className="max-w-4xl mx-auto px-5 py-2 flex items-center gap-2">
-              <StatusPill status={status} />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Next open question banner — shown only after first message and when not loading */}
-      <AnimatePresence>
-        {nextQuestion && !isEmpty && !isLoading && (
-          <motion.div
-            key={nextQuestion.id}
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={springSoft}
-            className="border-b border-primary/15 bg-primary/[0.04] overflow-hidden"
-          >
-            <div className="max-w-3xl mx-auto px-4 py-2 flex items-center justify-between gap-3">
-              <p className="text-xs text-primary/80 leading-snug flex-1">
-                <span className="font-medium text-primary">Next: </span>
-                {nextQuestion.question}
-              </p>
-              <button
-                onClick={handleSkipQuestion}
-                className="flex-shrink-0 text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors flex items-center gap-1"
-                title="Prefer not to answer"
-              >
-                <XIcon className="size-3" />
-                Skip
-              </button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Conversation */}
       <Conversation className="flex-1">
         <ConversationContent className="max-w-3xl mx-auto w-full">
@@ -424,7 +366,7 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
           </AnimatePresence>
 
           <AnimatePresence initial={false}>
-            {messages.map((message) => (
+            {messages.map((message, idx) => (
               <motion.div
                 key={message.id}
                 layout
@@ -436,7 +378,7 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
                 <Message from={message.role}>
                   {message.role === "assistant" ? (
                     <div className="flex items-start gap-3 w-full">
-                      <AssistantAvatar />
+                      <AssistantAvatar streaming={status === "streaming" && idx === messages.length - 1} />
                       <MessageContent className="flex-1 prose-chat">
                         {message.parts.map((part, i) => {
                           if (part.type === "text") {
@@ -465,8 +407,27 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
             ))}
           </AnimatePresence>
 
+          <AnimatePresence mode="wait">
+            {isThinking ? (
+              <ThinkingIndicator key="thinking" label="Thinking..." />
+            ) : status === "streaming" ? (
+              <ThinkingIndicator key="responding" label="Responding..." />
+            ) : null}
+          </AnimatePresence>
+
           <AnimatePresence>
-            {isThinking && <ThinkingIndicator key="thinking" />}
+            {showAdvisorCta && !isLoading && (
+              <motion.div
+                key="advisor-cta"
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                transition={springSoft}
+                className="max-w-3xl mx-auto w-full px-4 pb-4"
+              >
+                <NextStepAction onOpen={() => setAdvisorModalOpen(true)} />
+              </motion.div>
+            )}
           </AnimatePresence>
         </ConversationContent>
 
@@ -494,6 +455,21 @@ function ChatContent({ onNewChat }: { onNewChat: () => void }) {
           </PromptInput>
         </div>
       </div>
+
+      <AdvisorSummaryModal
+        open={advisorModalOpen}
+        onClose={() => setAdvisorModalOpen(false)}
+        profile={profile ?? null}
+        threadId={threadId}
+        onDownload={(profileSnapshot, summaryText) => {
+          downloadAdvisorPdf({
+            profile: profileSnapshot,
+            summaryText,
+            generatedDate: new Date().toISOString().split("T")[0],
+          });
+          setAdvisorModalOpen(false);
+        }}
+      />
     </div>
   );
 }

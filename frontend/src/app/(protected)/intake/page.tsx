@@ -151,7 +151,7 @@ function Step1({
   async function toggle(type: IncomeType) {
     if (!profile) return;
     await onSave({
-      incomeTypes: { ...profile.incomeTypes, [type]: !profile.incomeTypes[type] },
+      incomeTypes: { ...profile.incomeTypes, [type]: !(profile.incomeTypes?.[type]) },
     });
   }
 
@@ -170,7 +170,7 @@ function Step1({
             <span className="text-sm capitalize">{type}</span>
             <input
               type="checkbox"
-              checked={profile?.incomeTypes[type] ?? false}
+              checked={profile?.incomeTypes?.[type] ?? false}
               onChange={() => toggle(type)}
               disabled={saving}
               className="size-4 accent-primary"
@@ -232,7 +232,7 @@ function Step2({
               disabled={saving}
               className={[
                 "px-4 py-2.5 rounded-xl text-sm border transition-colors",
-                profile?.advisorContext.visaType === value
+                profile?.advisorContext?.visaType === value
                   ? "bg-primary/10 border-primary/40 text-primary"
                   : "border-border/60 text-muted-foreground hover:border-primary/30 hover:text-foreground",
               ].join(" ")}
@@ -253,7 +253,7 @@ function Step2({
               disabled={saving}
               className={[
                 "flex-1 px-4 py-2.5 rounded-xl text-sm border transition-colors",
-                profile?.advisorContext.taxResidentElsewhere === value
+                profile?.advisorContext?.taxResidentElsewhere === value
                   ? "bg-primary/10 border-primary/40 text-primary"
                   : "border-border/60 text-muted-foreground hover:border-primary/30 hover:text-foreground",
               ].join(" ")}
@@ -296,7 +296,7 @@ function Step3({
   onBack: () => void;
   onComplete: () => Promise<void>;
 }) {
-  const hasEmployment = profile?.incomeTypes.employment;
+  const hasEmployment = profile?.incomeTypes?.employment;
 
   async function setEmploymentField(
     field: "foreignEmployer" | "salaryBorneByLocalEntity" | "workedWhileInJurisdiction",

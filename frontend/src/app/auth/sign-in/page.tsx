@@ -47,7 +47,7 @@ export default function SignInPage() {
           >
             Sign in
           </h1>
-          <p className="text-xs text-muted-foreground">Welcome back to Ledger</p>
+          <p className="text-xs text-muted-foreground">Welcome back to Tax Compass</p>
         </div>
 
         {error && (

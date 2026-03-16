@@ -229,7 +229,8 @@ def _is_field_missing(field_path: str, profile: dict) -> bool:
         trips = (profile.get("presence") or {}).get("trips") or []
         if not trips:
             return True
-        return any(not t.get("entryDate") or not t.get("exitDate") for t in trips)
+        # Answered if at least one complete trip (both dates present) exists
+        return not any(t.get("entryDate") and t.get("exitDate") for t in trips)
 
     if field_path == "incomeTypes":
         income = profile.get("incomeTypes") or {}

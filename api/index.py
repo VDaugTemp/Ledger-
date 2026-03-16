@@ -33,6 +33,19 @@ app.add_middleware(
 )
 
 
+_SUMMARY_SYSTEM = """You are preparing a concise handoff note for a Malaysian tax accountant.
+
+Write 2-4 sentences describing what this client was enquiring about in their AI-assisted conversation.
+
+Cover: the main tax topics or questions raised (e.g. crypto treatment, DE Rantau implications, DTAs, FSI remittance), any notable concerns or flags, and the general nature of their situation.
+
+Do NOT repeat profile fields (income type, visa, trip dates, etc.) — those are captured separately in the form.
+Do NOT give tax advice or make definitive statements.
+Write in third person: "This client is enquiring about..."
+Be concise — 2-4 sentences maximum.
+Output plain text only. No headers, labels, bold formatting, or prefixes (e.g. do not write "Handoff Note:" or "Summary:" before the text)."""
+
+
 class ChatRequest(BaseModel):
     input: str
     config: dict[str, Any] | None = None
@@ -43,6 +56,10 @@ class ChatRequest(BaseModel):
     # Legacy (backward compat — still accepted but not used if profile is present)
     profile_context: str | None = None
     user_id: str | None = None
+
+
+class SummaryRequest(BaseModel):
+    thread_id: str
 
 
 @app.get("/app/health")
@@ -223,3 +240,47 @@ async def chat_eval(
         "contexts": contexts,
         "policy": policy,
     }
+
+
+@app.post("/app/chat/summary")
+async def chat_summary(payload: SummaryRequest):
+    from langchain_core.messages import HumanMessage as LCHuman, AIMessage as LCAi, SystemMessage
+
+    graph = await get_graph()
+    config = {"configurable": {"thread_id": payload.thread_id}}
+
+    try:
+        snapshot = await graph.aget_state(config)
+    except Exception as exc:
+        return {"error": f"Could not retrieve conversation: {exc}"}
+
+    messages = (snapshot.values or {}).get("messages") or []
+
+    # Build compact transcript from last 20 messages
+    lines: list[str] = []
+    for msg in messages[-20:]:
+        if isinstance(msg, LCHuman):
+            content = msg.content if isinstance(msg.content, str) else ""
+            if content:
+                lines.append(f"Client: {content}")
+        elif isinstance(msg, LCAi):
+            content = msg.content if isinstance(msg.content, str) else ""
+            if content:
+                lines.append(f"Advisor: {content[:400]}")  # truncate long turns
+
+    if not lines:
+        return {"summary": ""}
+
+    transcript = "\n".join(lines)
+
+    try:
+        from lib.model_provider import ModelProviderChatModel
+        model = ModelProviderChatModel(timeout=20)
+        response = await model.ainvoke([
+            SystemMessage(content=_SUMMARY_SYSTEM),
+            LCHuman(content=f"Conversation transcript:\n\n{transcript}"),
+        ])
+        summary = response.content if isinstance(response.content, str) else ""
+        return {"summary": summary}
+    except Exception as exc:
+        return {"error": str(exc)}

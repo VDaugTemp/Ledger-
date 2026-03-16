@@ -15,7 +15,7 @@ export function formatProfileContext(
   ];
 
   // Income types
-  const active = Object.entries(profile.incomeTypes)
+  const active = Object.entries(profile.incomeTypes ?? {})
     .filter(([, v]) => v)
     .map(([k]) => k);
   lines.push(`• Income: ${active.length ? active.join(", ") : "none declared"}`);

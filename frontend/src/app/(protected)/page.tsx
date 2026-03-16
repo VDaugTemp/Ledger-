@@ -72,7 +72,7 @@ export default function Home() {
               className="size-1.5 rounded-full bg-primary/70 inline-block"
               style={{ boxShadow: "0 0 8px oklch(0.72 0.10 195 / 0.5)" }}
             />
-            AI-Powered Accountancy
+            AI-Powered Accountancy Research
           </span>
         </motion.div>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createUser, getUser, patchProfile } from "@/lib/userApi";
 import { applyProfilePatch } from "@/lib/openQuestions";
 import type { Profile } from "@/lib/types";
@@ -40,10 +40,19 @@ export function useUserProfile(opts: Options = {}): UseUserProfileResult {
 
   const token = opts.accessToken;
 
+  // Counter to discard stale fetch results from superseded bootstrap calls.
+  // Scenario: initial mount triggers a mock-mode fetch (opts.userId = undefined),
+  // then auth resolves and triggers a real fetch (opts.userId = cognitoSub).
+  // Without this guard, the slower mock fetch could overwrite the real profile.
+  const fetchCounterRef = useRef(0);
+
   const fetchProfile = useCallback(
     async (uid: string) => {
+      const seq = ++fetchCounterRef.current;
       const { profile: fetched } = await getUser(uid, token);
-      setProfile(fetched);
+      if (seq === fetchCounterRef.current) {
+        setProfile(fetched);
+      }
     },
     [token],
   );

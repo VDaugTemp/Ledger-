@@ -32,6 +32,15 @@ TAVILY_URLS: dict[str, list[str]] = {
 ALLOWED_TOPICS = frozenset(TAVILY_URLS.keys())
 MAX_RESULTS = 5
 
+_tavily_client: TavilyClient | None = None
+
+
+def _get_tavily_client() -> TavilyClient:
+    global _tavily_client
+    if _tavily_client is None:
+        _tavily_client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY", ""))
+    return _tavily_client
+
 
 def official_web_lookup(query: str, topic: str) -> dict[str, Any]:
     """Search LHDN official pages via Tavily for the given topic.
@@ -49,7 +58,7 @@ def official_web_lookup(query: str, topic: str) -> dict[str, Any]:
     if topic not in ALLOWED_TOPICS:
         raise ValueError(f"Invalid topic '{topic}'. Must be one of {sorted(ALLOWED_TOPICS)}")
 
-    client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY", ""))
+    client = _get_tavily_client()
 
     raw = client.search(
         query=query,

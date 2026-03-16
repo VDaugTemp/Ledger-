@@ -76,6 +76,7 @@ class AgentState(TypedDict):
     tavily_triggered: bool
     tavily_reason: Optional[str]        # "freshnessRequested" | "retrievalFailed" | "both" | null
     tavily_results: list[dict]
+    mode: str                           # "fast" | "private"
 
 
 # ── Answer node system prompt ─────────────────────────────────────────────────
@@ -310,7 +311,7 @@ _HYDE_SYSTEM = (
 )
 
 
-async def _hyde_query(question: str) -> str:
+async def _hyde_query(question: str, mode: str = "fast") -> str:
     """HyDE: generate a hypothetical legal passage and use it as the embedding query.
 
     User queries are conversational; source chunks are formal legal text. Embedding a
@@ -318,18 +319,41 @@ async def _hyde_query(question: str) -> str:
     reduces the semantic gap and improves retrieval precision.
     Falls back to the original question if generation fails.
     """
+    import hashlib
+
+    cache_key = f"hyde_cache:{hashlib.sha256(question[:500].encode()).hexdigest()}"
+
+    # Try cache first
     try:
-        model = ModelProviderChatModel(timeout=20)
+        graph = await get_graph()
+        conn = graph.checkpointer.conn  # aioredis.Redis
+        cached = await conn.get(cache_key)
+        if cached:
+            print("[RETRIEVE] HyDE cache hit")
+            return cached.decode() if isinstance(cached, bytes) else str(cached)
+    except Exception as exc:
+        print(f"[RETRIEVE] HyDE cache read failed: {exc}")
+
+    try:
+        model = ModelProviderChatModel(timeout=20, mode=mode)
         response = await model.ainvoke([
             SystemMessage(content=_HYDE_SYSTEM),
             HumanMessage(content=question),
         ])
         text = response.content if isinstance(response.content, str) else question
         print(f"[HYDE] generated passage ({len(text)} chars) for query: {question[:60]}")
-        return text
     except Exception as exc:
         print(f"[HYDE] fallback to original query: {exc}")
         return question
+
+    # Store in cache
+    try:
+        graph2 = await get_graph()
+        await graph2.checkpointer.conn.setex(cache_key, 14400, text)
+    except Exception as exc:
+        print(f"[RETRIEVE] HyDE cache write failed: {exc}")
+
+    return text
 
 
 async def retrieve_node(state: AgentState) -> dict:
@@ -338,8 +362,9 @@ async def retrieve_node(state: AgentState) -> dict:
     if not query:
         return {"retrieved_chunks": [], "max_qdrant_score": 0.0}
 
+    mode = state.get("mode", "fast")
     # HyDE: embed a hypothetical document instead of the raw user query
-    embedding_query = await _hyde_query(query)
+    embedding_query = await _hyde_query(query, mode=mode)
 
     vs = _get_vector_store()
     try:
@@ -507,11 +532,13 @@ async def answer_node(state: AgentState) -> dict:
     llm_messages: list = [SystemMessage(content=_ANSWER_SYSTEM)]
     if context_parts:
         llm_messages.append(SystemMessage(content="\n\n".join(context_parts)))
-    # Last 10 messages (skip empty AI messages)
-    history = [m for m in messages[-10:] if not isinstance(m, AIMessage) or m.content]
+    # Configurable context window (LLM_MAX_CONTEXT_MESSAGES env var, default 20)
+    max_ctx = int(os.getenv("LLM_MAX_CONTEXT_MESSAGES", "20"))
+    history = [m for m in messages[-max_ctx:] if not isinstance(m, AIMessage) or m.content]
     llm_messages.extend(history)
 
-    model = ModelProviderChatModel(timeout=60)
+    mode = state.get("mode", "fast")
+    model = ModelProviderChatModel(timeout=60, mode=mode)
     response = await model.ainvoke(llm_messages)
     return {"messages": [response]}
 
@@ -648,7 +675,11 @@ async def get_graph():
             if not redis_url.startswith(("redis://", "rediss://", "unix://")):
                 redis_url = "redis://" + redis_url
 
-            checkpointer = AsyncRedisSaver(redis_url=redis_url, checkpoint_prefix="tax-agent-v2")
+            checkpointer = AsyncRedisSaver(
+                redis_url=redis_url,
+                checkpoint_prefix="tax-agent-v2",
+                ttl={"default_ttl": 14400},  # unit: minutes; 14400 min = 10 days
+            )
             await checkpointer.asetup()
 
             builder = StateGraph(AgentState)

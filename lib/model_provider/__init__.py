@@ -1,6 +1,6 @@
 """ModelProvider: single interface for LLM chat and embeddings. No direct vendor SDK usage outside this package."""
 
-from lib.model_provider.config import get_model_provider, chat, embed
+from lib.model_provider.config import get_model_provider, get_model_provider_for_mode, chat, embed
 from lib.model_provider.exceptions import (
     AuthError,
     InvalidRequestError,
@@ -19,6 +19,7 @@ from lib.model_provider.types import (
 
 __all__ = [
     "get_model_provider",
+    "get_model_provider_for_mode",
     "chat",
     "embed",
     "ModelProviderChatModel",

@@ -18,7 +18,7 @@ type TextPart = { type: "text"; text: string };
 
 export async function POST(req: Request) {
   const body = await req.json();
-  const { messages, threadId, profileContext, userId, profile, skippedFieldPaths, todayIso } = body as {
+  const { messages, threadId, profileContext, userId, profile, skippedFieldPaths, todayIso, mode } = body as {
     messages?: UIMessage[];
     threadId?: string;
     profileContext?: string;
@@ -26,6 +26,7 @@ export async function POST(req: Request) {
     profile?: Record<string, unknown>;
     skippedFieldPaths?: string[];
     todayIso?: string;
+    mode?: string;
   };
 
   const lastMsg = messages?.at(-1);
@@ -44,6 +45,7 @@ export async function POST(req: Request) {
   if (skippedFieldPaths) backendBody.skipped_field_paths = skippedFieldPaths;
   if (todayIso) backendBody.today_iso = todayIso;
   if (userId) backendBody.user_id = userId;
+  if (mode) backendBody.mode = mode;
 
   const backendRes = await fetch(`${BACKEND_URL}/app/chat`, {
     method: "POST",
@@ -111,6 +113,14 @@ export async function POST(req: Request) {
               writer.write({ type: "data-profile-update", data: patch });
             } catch {
               // skip malformed profile update
+            }
+            currentEvent = "";
+          } else if (line.startsWith("data: ") && currentEvent === "status") {
+            try {
+              const payload = JSON.parse(line.slice(6));
+              writer.write({ type: "data-status", data: payload });
+            } catch {
+              // skip malformed status event
             }
             currentEvent = "";
           }

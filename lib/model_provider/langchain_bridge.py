@@ -13,7 +13,7 @@ from langchain_core.messages.tool import ToolCall, ToolCallChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from lib.model_provider.config import get_model_provider
+from lib.model_provider.config import get_model_provider, get_model_provider_for_mode
 from lib.model_provider.types import ChatMessage, ChatResult as ProviderChatResult
 
 
@@ -92,12 +92,17 @@ class ModelProviderEmbeddings(Embeddings):
 
 
 class ModelProviderChatModel(BaseChatModel):
-    """LangChain ChatModel backed by ModelProvider (Anthropic). Supports async streaming."""
+    """LangChain ChatModel backed by ModelProvider. Supports async streaming.
+
+    mode="fast"    → AnthropicChatProvider
+    mode="private" → FireworksChatProvider
+    """
 
     model_name: str = "claude-haiku-4-5-20251001"
     temperature: float = 0.0
     max_tokens: int = 4096
     timeout: int | None = 60
+    mode: str = "fast"
     # Prevent LangChain from silently switching ainvoke → _astream when
     # astream_events injects a _StreamingCallbackHandler.  Streaming is still
     # available explicitly via .astream() / graph SSE; the api/index.py
@@ -148,12 +153,12 @@ class ModelProviderChatModel(BaseChatModel):
         **kwargs: Any,
     ) -> ChatResult:
         system, provider_messages = _lc_messages_to_provider(messages)
-        config = get_model_provider()
+        config = get_model_provider_for_mode(self.mode)
         result = await config.chat_provider.chat(
             provider_messages,
             model=kwargs.get("model") or self.model_name,
-            temperature=kwargs.get("temperature", self.temperature),
-            max_tokens=kwargs.get("max_tokens", self.max_tokens),
+            temperature=kwargs.get("temperature", config.default_temperature),
+            max_tokens=kwargs.get("max_tokens", config.default_max_tokens),
             stream=False,
             tools=kwargs.get("tools"),
             tool_choice=kwargs.get("tool_choice"),
@@ -212,12 +217,12 @@ class ModelProviderChatModel(BaseChatModel):
             return
 
         system, provider_messages = _lc_messages_to_provider(messages)
-        config = get_model_provider()
+        config = get_model_provider_for_mode(self.mode)
         stream_iter = await config.chat_provider.chat(
             provider_messages,
             model=kwargs.get("model") or self.model_name,
-            temperature=kwargs.get("temperature", self.temperature),
-            max_tokens=kwargs.get("max_tokens", self.max_tokens),
+            temperature=kwargs.get("temperature", config.default_temperature),
+            max_tokens=kwargs.get("max_tokens", config.default_max_tokens),
             stream=True,
             tools=kwargs.get("tools"),
             tool_choice=kwargs.get("tool_choice"),

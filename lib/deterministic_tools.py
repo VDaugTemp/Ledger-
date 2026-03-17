@@ -928,3 +928,131 @@ _FRESHNESS_RE = re.compile(
 def freshness_requested(message: str) -> bool:
     """Return True if user message signals a request for fresh/current information."""
     return bool(_FRESHNESS_RE.search(message))
+
+
+# ── Query term expansion ───────────────────────────────────────────────────────
+
+# Maps informal phrases → legal terms to append.
+# Keys are lowercase; values are strings of space-separated legal tokens.
+# Longer phrases appear before shorter substrings to avoid partial shadowing.
+_EXPANSION_MAP: list[tuple[str, str]] = [
+    # Residency
+    ("183 day rule",             "physical presence test s7(1)(a) ITA"),
+    ("half year rule",           "physical presence test s7(1)(a) ITA"),
+    ("183 days",                 "physical presence test s7(1)(a) ITA"),
+    ("tax residency",            "residence status individual ITA s7"),
+    ("tax resident",             "residence status individual ITA s7"),
+    ("become resident",          "residence status individual ITA s7"),
+    ("short visit",              "s7(1)(c) ITA linked period"),
+    ("short stay",               "s7(1)(c) ITA linked period"),
+    ("60 days",                  "s7(1)(c) ITA linked period"),
+    ("tie breaker",              "DTA tie-breaker article 4"),
+    ("dual resident",            "DTA tie-breaker article 4"),
+    ("two countries",            "DTA tie-breaker article 4"),
+    # Visa
+    ("digital nomad visa",       "DE Rantau Pass residence status"),
+    ("de rantau",                "DE Rantau Pass residence status"),
+    ("derantau",                 "DE Rantau Pass residence status"),
+    ("employment pass",          "employment pass residence status"),
+    ("work permit",              "employment pass residence status"),
+    ("mm2h",                     "MM2H programme residence status"),
+    ("my second home",           "MM2H programme residence status"),
+    # Income
+    ("work from home",           "employment income exercising employment Malaysia s4(b)"),
+    ("work remotely",            "employment income exercising employment Malaysia s4(b)"),
+    ("remote work",              "employment income exercising employment Malaysia s4(b)"),
+    ("income from abroad",       "foreign-source income FSI Schedule 6 exemption"),
+    ("overseas income",          "foreign-source income FSI Schedule 6 exemption"),
+    ("foreign income",           "foreign-source income FSI Schedule 6 exemption"),
+    ("self-employed",            "self-employment business income s4(b) ITA"),
+    ("freelancer",               "self-employment business income s4(b) ITA"),
+    ("freelance",                "self-employment business income s4(b) ITA"),
+    ("contractor",               "self-employment business income s4(b) ITA"),
+    ("cryptocurrency",           "digital assets gains income tax"),
+    ("digital assets",           "digital assets gains income tax"),
+    ("bitcoin",                  "digital assets gains income tax"),
+    ("crypto",                   "digital assets gains income tax"),
+    ("property income",          "rental income s4(d) ITA real property"),
+    ("rental income",            "rental income s4(d) ITA real property"),
+    ("dividend income",          "dividend income s4(c) exempt single tier"),
+    ("dividends",                "dividend income s4(c) exempt single tier"),
+    ("savings interest",         "interest income s4(c) ITA"),
+    ("interest income",          "interest income s4(c) ITA"),
+    ("passive income",           "passive income s4 ITA FSI remittance"),
+    ("employment income",        "employment income s4(b) ITA gross income"),
+    ("salary",                   "employment income s4(b) ITA gross income"),
+    ("wages",                    "employment income s4(b) ITA gross income"),
+    # Tax relief
+    ("tax deductible",           "personal relief Schedule 9 ITA"),
+    ("tax relief",               "personal relief Schedule 9 ITA"),
+    ("deductions",               "personal relief Schedule 9 ITA"),
+    ("medical expenses",         "medical relief Schedule 9 para 46D"),
+    ("medical relief",           "medical relief Schedule 9 para 46D"),
+    ("education relief",         "education fees relief Schedule 9"),
+    ("course fees",              "education fees relief Schedule 9"),
+    # Treaty
+    ("avoid double taxation",    "double taxation agreement DTA treaty"),
+    ("taxed twice",              "double taxation agreement DTA treaty"),
+    ("double tax",               "double taxation agreement DTA treaty"),
+    ("tax treaty",               "double taxation agreement DTA article"),
+    ("treaty country",           "double taxation agreement DTA article"),
+    ("dta",                      "double taxation agreement DTA article"),
+    # Filing
+    ("filing deadline",          "Form BE Form B submission deadline LHDN April"),
+    ("tax deadline",             "Form BE Form B submission deadline LHDN April"),
+    ("when to file",             "Form BE Form B submission deadline LHDN April"),
+    ("due date",                 "Form BE Form B submission deadline LHDN April"),
+    ("form be",                  "tax return filing form resident non-resident"),
+    ("form b",                   "tax return filing form resident non-resident"),
+    ("form m",                   "tax return filing form resident non-resident"),
+    ("overdue tax",              "additional tax penalty s103 ITA LHDN"),
+    ("late filing",              "additional tax penalty s103 ITA LHDN"),
+    ("penalty",                  "additional tax penalty s103 ITA LHDN"),
+    ("lhdn audit",               "audit investigation LHDN s78 ITA"),
+    ("tax audit",                "audit investigation LHDN s78 ITA"),
+    ("online filing",            "e-filing LHDN MyTax submission"),
+    ("mytax",                    "e-filing LHDN MyTax submission"),
+    ("e-filing",                 "e-filing LHDN MyTax submission"),
+    # FSI / remittance
+    ("transfer to malaysia",     "remittance FSI foreign-source income received Malaysia"),
+    ("bring money in",           "remittance FSI foreign-source income received Malaysia"),
+    ("remittance",               "remittance FSI foreign-source income received Malaysia"),
+    ("overseas account",         "foreign-source income remittance Schedule 6"),
+    ("foreign bank account",     "foreign-source income remittance Schedule 6"),
+    # Employer
+    ("malaysian company",        "Malaysian employer resident company s4(b)"),
+    ("local employer",           "Malaysian employer resident company s4(b)"),
+    ("overseas employer",        "non-resident employer DTA article 15"),
+    ("foreign employer",         "non-resident employer DTA article 15"),
+    ("cost recharge",            "salary borne local entity DTA employment article"),
+    ("recharged",                "salary borne local entity DTA employment article"),
+    ("borne by",                 "salary borne local entity DTA employment article"),
+]
+
+
+def expand_query_terms(query: str) -> str:
+    """Append legal synonym expansions to a user query.
+
+    Scans the query case-insensitively against _EXPANSION_MAP. For each
+    matching informal phrase, appends its legal expansion tokens — but only
+    those not already present in the query (case-insensitive). Returns the
+    original query unchanged if no matches.
+
+    Pure function: no I/O, no LLM calls.
+    """
+    query_lower = query.lower()
+    extra_tokens: list[str] = []
+    seen_tokens: set[str] = set(query_lower.split())
+
+    for phrase, expansion in _EXPANSION_MAP:
+        if phrase in query_lower:
+            for token in expansion.split():
+                token_lower = token.lower()
+                if token_lower not in seen_tokens:
+                    extra_tokens.append(token)
+                    seen_tokens.add(token_lower)
+
+    if not extra_tokens:
+        return query
+
+    return query + " " + " ".join(extra_tokens)

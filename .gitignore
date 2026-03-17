@@ -1,6 +1,8 @@
 # Project Specific
 uv.lock
 data/
+/.claude
+/CLAUDE.md
 
 # OS
 .DS_Store

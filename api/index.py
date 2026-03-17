@@ -27,7 +27,7 @@ from pydantic import BaseModel
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from lib.agent import get_graph, _get_vector_store
+from lib.agent import get_graph, _get_qdrant_client
 from lib.model_provider import get_model_provider
 from lib.jailbreak_guard import is_jailbreak, warmup as jailbreak_warmup
 
@@ -73,7 +73,7 @@ async def lifespan(app: FastAPI):
     print("[STARTUP] Warming up singletons…")
     try:
         await get_graph()
-        _get_vector_store()
+        _get_qdrant_client()
         get_model_provider()
         jailbreak_warmup()
         print("[STARTUP] Warmup complete")

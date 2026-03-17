@@ -13,18 +13,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Optional
 
+import redis.asyncio as aioredis
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_qdrant import QdrantVectorStore
 from langgraph.checkpoint.redis import AsyncRedisSaver
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from qdrant_client import QdrantClient
+from qdrant_client.models import Prefetch, FusionQuery, Fusion
 from typing_extensions import TypedDict
 
 from lib.deterministic_tools import (
     apply_profile_patch,
     consistency_checker,
+    expand_query_terms,
     filing_form_selector,
     freshness_requested as detect_freshness,
     intent_classifier,
@@ -39,25 +41,38 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv(ROOT_DIR / ".env.local", override=True)
 
-# ── Vector store (lazy init) ──────────────────────────────────────────────────
+# ── Singletons (lazy init) ────────────────────────────────────────────────────
 _qdrant_client: Optional[QdrantClient] = None
-_vector_store: Optional[QdrantVectorStore] = None
+_dense_embeddings: Optional[ModelProviderEmbeddings] = None
+_redis_client: Optional[aioredis.Redis] = None
 
 
-def _get_vector_store() -> QdrantVectorStore:
-    global _qdrant_client, _vector_store
-    if _vector_store is None:
+async def _get_redis_client() -> aioredis.Redis:
+    global _redis_client
+    if _redis_client is None:
+        url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+        if not url.startswith(("redis://", "rediss://", "unix://")):
+            url = "redis://" + url
+        _redis_client = aioredis.from_url(url, decode_responses=False)
+    return _redis_client
+
+
+def _get_qdrant_client() -> QdrantClient:
+    global _qdrant_client
+    if _qdrant_client is None:
         _qdrant_client = QdrantClient(
             url=os.getenv("QDRANT_URL"),
             api_key=os.getenv("QDRANT_API_KEY"),
         )
-        embeddings = ModelProviderEmbeddings(model="text-embedding-3-small")
-        _vector_store = QdrantVectorStore(
-            client=_qdrant_client,
-            collection_name="malaysia-tax-laws",
-            embedding=embeddings,
-        )
-    return _vector_store
+    return _qdrant_client
+
+
+def _get_dense_embeddings() -> ModelProviderEmbeddings:
+    global _dense_embeddings
+    if _dense_embeddings is None:
+        _dense_embeddings = ModelProviderEmbeddings(model="text-embedding-3-small")
+    return _dense_embeddings
+
 
 
 # ── Graph state ───────────────────────────────────────────────────────────────
@@ -301,17 +316,39 @@ def controller_node(state: AgentState) -> dict:
 
 # ── Retrieve node ─────────────────────────────────────────────────────────────
 
-MIN_SCORE = 0.25  # Minimum Qdrant relevance score to consider retrieval successful
+# MIN_SCORE = 0.25  # DEPRECATED — was cosine similarity threshold; not applicable to RRF scores
+MIN_RRF_SCORE = 0.010  # Tavily fallback if top RRF score < this.
+# RRF formula: Σ 1/(k+rank) with k=60. Max score ≈ 0.033 (top-1 in both legs).
+# Below 0.010 means the top result ranked outside ~top-5 in both dense and sparse.
+# Calibrate after first deployment by inspecting logged maxRRFScore values.
 
 _HYDE_SYSTEM = (
-    "You are a Malaysian tax law expert. Write a concise excerpt (3-5 sentences) from a "
+    "You are a Malaysian tax law expert. Write a concise excerpt (4-6 sentences) from a "
     "Malaysian tax statute or LHDN public ruling that directly answers the question below. "
-    "Use formal legal language and cite specific section numbers where possible. "
+    "Use formal legal language. Cite specific section numbers (e.g. s7(1)(a), s7(1)(b), "
+    "s4(b), s13) and public ruling references (e.g. PR 11/2017, PR 5/2022) where applicable. "
+    "Where the question involves day-counting or residency periods, include the relevant "
+    "threshold (182 days), the calendar-year test, and the linked-period rule if relevant. "
+    "Where the question involves foreign-source income, mention the FSI exemption and "
+    "remittance rules under s3A ITA. "
     "Do not add commentary, caveats, or advice — write only as the source document would."
 )
 
+_HYDE_SYSTEM_EDGE = (
+    "You are a Malaysian tax law expert. Write a concise excerpt (4-6 sentences) focusing on "
+    "the exceptions, special conditions, linking rules, or edge cases that apply to the "
+    "question below. Write as a Malaysian tax statute or LHDN public ruling would. "
+    "For residency questions: address the linked-period rule (s7(1)(b)/(c)), the 60-day "
+    "short-visit exception, and cross-calendar-year scenarios. "
+    "For income questions: address source rules, employer-of-record distinctions, and "
+    "knowledge worker / MM2H special rates where relevant. "
+    "For DTA questions: address permanent establishment (PE) thresholds, tie-breaker "
+    "articles, and the 183-day employment article. "
+    "Cite section numbers and PR references. Do not add advice — write as the source document."
+)
 
-async def _hyde_query(question: str, mode: str = "fast") -> str:
+
+async def _hyde_query(question: str, mode: str = "fast", system: str = _HYDE_SYSTEM) -> str:
     """HyDE: generate a hypothetical legal passage and use it as the embedding query.
 
     User queries are conversational; source chunks are formal legal text. Embedding a
@@ -321,12 +358,11 @@ async def _hyde_query(question: str, mode: str = "fast") -> str:
     """
     import hashlib
 
-    cache_key = f"hyde_cache:{hashlib.sha256(question[:500].encode()).hexdigest()}"
+    cache_key = f"hyde_cache:{hashlib.sha256((system + question[:500]).encode()).hexdigest()}"
 
     # Try cache first
     try:
-        graph = await get_graph()
-        conn = graph.checkpointer.conn  # aioredis.Redis
+        conn = await _get_redis_client()
         cached = await conn.get(cache_key)
         if cached:
             print("[RETRIEVE] HyDE cache hit")
@@ -337,7 +373,7 @@ async def _hyde_query(question: str, mode: str = "fast") -> str:
     try:
         model = ModelProviderChatModel(timeout=20, mode=mode)
         response = await model.ainvoke([
-            SystemMessage(content=_HYDE_SYSTEM),
+            SystemMessage(content=system),
             HumanMessage(content=question),
         ])
         text = response.content if isinstance(response.content, str) else question
@@ -348,8 +384,8 @@ async def _hyde_query(question: str, mode: str = "fast") -> str:
 
     # Store in cache
     try:
-        graph2 = await get_graph()
-        await graph2.checkpointer.conn.setex(cache_key, 14400, text)
+        conn = await _get_redis_client()
+        await conn.setex(cache_key, 14400, text)
     except Exception as exc:
         print(f"[RETRIEVE] HyDE cache write failed: {exc}")
 
@@ -363,13 +399,34 @@ async def retrieve_node(state: AgentState) -> dict:
         return {"retrieved_chunks": [], "max_qdrant_score": 0.0}
 
     mode = state.get("mode", "fast")
-    # HyDE: embed a hypothetical document instead of the raw user query
-    embedding_query = await _hyde_query(query, mode=mode)
 
-    vs = _get_vector_store()
+    # Deterministic terminology expansion (improves HyDE signal)
+    expanded = expand_query_terms(query)
+
+    # Multi-query HyDE: two passages in parallel — primary rule + edge cases/exceptions
+    hyde_primary, hyde_edge = await asyncio.gather(
+        _hyde_query(expanded, mode=mode, system=_HYDE_SYSTEM),
+        _hyde_query(expanded, mode=mode, system=_HYDE_SYSTEM_EDGE),
+    )
+
+    # Embed both passages concurrently
+    dense_vec_primary, dense_vec_edge = await asyncio.gather(
+        asyncio.to_thread(_get_dense_embeddings().embed_query, hyde_primary),
+        asyncio.to_thread(_get_dense_embeddings().embed_query, hyde_edge),
+    )
+
+    # Two dense prefetches → server-side RRF fusion → top 8
     try:
-        docs_and_scores = await asyncio.to_thread(
-            vs.similarity_search_with_score, embedding_query, k=5
+        results = await asyncio.to_thread(
+            _get_qdrant_client().query_points,
+            collection_name="malaysia-tax-laws-v2",
+            prefetch=[
+                Prefetch(query=dense_vec_primary, using="dense", limit=20),
+                Prefetch(query=dense_vec_edge, using="dense", limit=20),
+            ],
+            query=FusionQuery(fusion=Fusion.RRF),
+            limit=10,
+            with_payload=True,
         )
     except Exception as exc:
         print(f"[RETRIEVE] Error: {exc}")
@@ -377,23 +434,23 @@ async def retrieve_node(state: AgentState) -> dict:
 
     chunks = []
     scores = []
-    for doc, score in docs_and_scores:
-        meta = doc.metadata
+    for point in results.points:
+        payload = point.payload or {}
+        meta = payload.get("metadata", {})
         chunks.append({
-            "chunkId": meta.get("chunk_id", str(uuid.uuid4())),
-            "text": doc.page_content,
+            "chunkId": str(point.id),
+            "text": payload.get("page_content", ""),
             "sectionRef": meta.get("reference", ""),
             "sourceTitle": meta.get("title", ""),
             "sourceUrl": meta.get("url", ""),
-            "score": float(score),
+            "score": float(point.score),  # RRF score (~0.01–0.033)
         })
-        scores.append(float(score))
+        scores.append(float(point.score))
 
     max_score = max(scores) if scores else 0.0
 
-    # Log retrieval outcome
     print(
-        f"[RETRIEVE] maxQdrantScore={max_score:.4f} "
+        f"[RETRIEVE] maxRRFScore={max_score:.4f} "
         f"chunkCount={len(chunks)} "
         f"topic={state.get('topic', 'OTHER')} "
         f"freshnessRequested={state.get('freshness_requested', False)}"
@@ -415,7 +472,7 @@ async def tavily_lookup_node(state: AgentState) -> dict:
     max_score = state.get("max_qdrant_score", 0.0)
 
     # Determine reason
-    retrieval_failed = max_score < MIN_SCORE
+    retrieval_failed = max_score < MIN_RRF_SCORE
     if freshness and retrieval_failed:
         reason = "both"
     elif freshness:
@@ -645,7 +702,7 @@ def _should_tavily(state: AgentState) -> str:
     freshness = state.get("freshness_requested", False)
     max_score = state.get("max_qdrant_score", 0.0)
     topic = state.get("topic", "OTHER")
-    retrieval_failed = max_score < MIN_SCORE
+    retrieval_failed = max_score < MIN_RRF_SCORE
 
     if (freshness or retrieval_failed) and topic in ALLOWED_TOPICS:
         return "tavily_lookup"

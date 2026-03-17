@@ -505,3 +505,40 @@ def test_freshness_not_triggered():
 
 def test_freshness_case_insensitive():
     assert freshness_requested("LATEST ruling on DTA?") is True
+
+
+# ── expand_query_terms ────────────────────────────────────────────────────────
+
+from lib.deterministic_tools import expand_query_terms
+
+
+def test_expand_query_terms_exact_match():
+    result = expand_query_terms("Does the 183 day rule apply to me?")
+    assert "physical presence test" in result
+    assert "s7(1)(a)" in result
+    # original phrasing preserved
+    assert "183 day rule" in result
+
+
+def test_expand_query_terms_case_insensitive():
+    result = expand_query_terms("What about the 183 DAY RULE?")
+    assert "s7(1)(a)" in result
+
+
+def test_expand_query_terms_multiple_matches_deduplicated():
+    # "remote work" and "work from home" both expand to the same legal text
+    result = expand_query_terms("I do remote work and work from home in Malaysia")
+    # s4(b) should appear only once despite two informal matches
+    assert result.count("s4(b)") == 1
+
+
+def test_expand_query_terms_no_match_returns_original():
+    q = "Hello, how are you?"
+    assert expand_query_terms(q) == q
+
+
+def test_expand_query_terms_no_duplicate_if_already_present():
+    # If the legal term is already in the query, don't append it again
+    q = "Tell me about s7(1)(a) residence status"
+    result = expand_query_terms(q)
+    assert result.count("s7(1)(a)") == 1

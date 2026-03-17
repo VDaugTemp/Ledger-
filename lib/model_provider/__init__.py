@@ -9,6 +9,7 @@ from lib.model_provider.exceptions import (
     RateLimitError,
 )
 from lib.model_provider.langchain_bridge import ModelProviderChatModel, ModelProviderEmbeddings
+from lib.model_provider.sparse_embeddings import ModelProviderSparseEmbeddings
 from lib.model_provider.types import (
     ChatMessage,
     ChatResult,
@@ -24,6 +25,7 @@ __all__ = [
     "embed",
     "ModelProviderChatModel",
     "ModelProviderEmbeddings",
+    "ModelProviderSparseEmbeddings",
     "ModelProviderError",
     "RateLimitError",
     "AuthError",

@@ -8,13 +8,15 @@ from pathlib import Path
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# Paths: from frontend/notebooks, repo root is parent.parent
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+from lib.model_provider import ModelProviderSparseEmbeddings
+
+# Paths: ingest_utils.py lives in notebooks/, repo root is parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_PATH = REPO_ROOT / "data"
 
 # Chunk settings — same as ingest pipeline so chunks match what's in the vector store
 CHUNK_SIZE = 1200
-CHUNK_OVERLAP = 250
+CHUNK_OVERLAP = 400
 
 DOCUMENT_REGISTRY: dict[str, dict] = {
     "income-tax-act-1967-act-53.pdf": {
@@ -103,6 +105,14 @@ def get_splitter() -> RecursiveCharacterTextSplitter:
         separators=["\n\n\n", "\n\n", "\n", ". ", " ", ""],
         length_function=len,
     )
+
+
+def get_sparse_embedder() -> ModelProviderSparseEmbeddings:
+    """Return a BM42 sparse embedder for hybrid ingestion.
+
+    The FastEmbed model (~22 MB) downloads to ~/.cache/fastembed on first call.
+    """
+    return ModelProviderSparseEmbeddings()
 
 
 def load_and_chunk_file(

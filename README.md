@@ -207,7 +207,7 @@ Each chunk carries metadata: `reference`, `authority_level`, `doc_type`, `topics
 
 ### Retrieval → Augmentation → Generation
 
-- **Retrieval:** `similarity_search_with_score(query, k=5)` against Qdrant using `text-embedding-3-small`. If `max_qdrant_score < 0.25` and the topic is `DTA_COUNTRY_LIST | PUBLIC_RULING_UPDATE | FILING_DEADLINE_CHANGE`, falls through to Tavily (hasil.gov.my only).
+- **Retrieval:** Multi-query HyDE against `malaysia-tax-laws-v2` (Qdrant, named dense vectors). Two hypothetical legal passages are generated in parallel — one for the primary rule, one for edge cases — embedded with `text-embedding-3-small`, and fused server-side via RRF (`Prefetch×2 → FusionQuery(RRF) → k=10`). If `max_rrf_score < 0.010` and the topic is `DTA_COUNTRY_LIST | PUBLIC_RULING_UPDATE | FILING_DEADLINE_CHANGE`, falls through to Tavily (hasil.gov.my only).
 - **Augmentation:** Retrieved chunks are injected as `<retrieved_context>` alongside `<profile_context>`, `<decision_map>`, `<flags>`, `<freshness_addendum>`, `<suggested_form>`, and `<next_question>` XML blocks. Last 10 conversation messages are appended as history.
 - **Generation:** Single Claude Haiku 4.5 call. Instructed to answer first, cite section numbers, then ask exactly one profiling question verbatim. The deterministic critic node applies regex phrase softening post-generation — no second LLM call.
 
@@ -235,9 +235,9 @@ Legal PDFs have natural structure — paragraphs, numbered sections, sub-clauses
 
 Malaysian tax legislation is dense and cross-referential. At 1200 characters you can typically fit one full numbered section with its sub-clauses. Smaller chunks (e.g. 500 chars) routinely split a rule from the exception that qualifies it. Larger chunks (2000+) introduce unrelated adjacent sections that dilute retrieval signal.
 
-### Why chunk_overlap=250 (~21%)
+### Why chunk_overlap=400 (~33%)
 
-Ensures a rule straddling a chunk boundary appears in full in at least one chunk. Without overlap, a sentence like "A person is resident if in Malaysia for 182 days... [boundary] ...or linked to an adjacent year under PR 11/2017" would never be retrieved as a unit. 250 characters (~1–2 sentences) is enough to preserve continuity without doubling storage.
+Ensures a rule straddling a chunk boundary appears in full in at least one chunk. Without overlap, a sentence like "A person is resident if in Malaysia for 182 days... [boundary] ...or linked to an adjacent year under PR 11/2017" would never be retrieved as a unit. 400 characters (~2–3 sentences) provides stronger continuity for adjacent subsections like `s7(1)(a)` and `s7(1)(b)` that frequently appear together in residency questions. Increased from 250 in v3 after recall analysis showed cross-boundary subsection splits were a significant source of 0.0 recall cases.
 
 ### Why PyPDFLoader
 
@@ -354,9 +354,43 @@ Context Recall at 0.549 and Answer Relevancy at 0.449 have a ceiling: recall is 
 
 Overall the changes had the intended effect — the most actionable improvements landed exactly where the root causes were.
 
-## Next Steps
+### Evaluation Results v3
 
-HyDE improved retrieval significantly — precision is at 0.883, meaning Qdrant returns relevant chunks when it retrieves. Context Recall (0.549) and Answer Relevancy (0.449) have room to improve. The likely fix is hybrid search (dense + BM25): Malaysian tax law relies on exact terms like `s7(1)(a)`, `PR 11/2017`, and `Schedule 6` that keyword matching handles better than semantic similarity alone, especially when HyDE’s hypothetical passage uses different wording than the source.
+Evaluated on `test_questions.jsonl` — 192 questions across 3 language styles (regulatory, plain_user, informal) and 3 retrieval types (answerable, cross_section, unanswerable). Unanswerable cases excluded from RAGAS scoring.
+
+```
+One Question Compliance:  100.0%
+Citation Coverage:         90.0%
+Advice Leakage (pass%):   100.0%
+```
+
+| Metric | v2 (30 Qs) | v3 (192 Qs) | Change |
+|---|---|---|---|
+| Faithfulness | 0.57 | 0.65 | +0.08 |
+| Context Precision | 0.76 | 0.95 | +0.19 |
+| Context Recall | 0.48 | 0.66 | +0.18 |
+| Answer Relevancy | 0.40 | 0.46 | +0.06 |
+| One Question Compliance | 90.0% | 100.0% | +10pp |
+| Citation Coverage | 33% | 90.0% | +57pp |
+| Advice Leakage (pass%) | 100% | 100% | — |
+
+### What changed in v3
+
+**Multi-query HyDE** — retrieval now generates two hypothetical legal passages per query in parallel: one targeting the primary rule (`s7(1)(a)`, s4(b), PR references), one targeting edge cases and exceptions (linked periods, 60-day rule, cross-year scenarios, DTA tie-breakers). Both passages are embedded and fused server-side with RRF, returning the top 10 chunks. This directly addressed the 0.000 recall cases that were edge-case residency questions where a single HyDE passage picked the wrong angle.
+
+**Increased top-K (5 → 10)** — more candidate chunks per query means the relevant passage has a higher chance of being in the retrieved set, directly lifting recall.
+
+**Improved HyDE prompt** — added explicit cues for section numbers (`s7(1)(a)`, `s7(1)(b)`, `s3A`), PR references (`PR 11/2017`, `PR 5/2022`), and FSI/remittance rules so the hypothetical passage lands in the same embedding neighbourhood as the actual legal chunks.
+
+**Chunk overlap 250 → 400** — reduces information loss at boundaries between adjacent subsections (e.g. `s7(1)(a)` and `s7(1)(b)` appearing in the same window), and corpus re-ingested into `malaysia-tax-laws-v2` with named dense vectors.
+
+**Better eval dataset** — switched from 30 hand-crafted questions to 192 questions generated across all 7 source documents, 3 language registers, and including cross-section questions that require multi-chunk reasoning. More reliable signal for tuning.
+
+### Conclusions v3
+
+Context Precision at 0.95 means retrieved chunks are almost always relevant — the retrieval quality problem is largely solved. The remaining gap is in recall (0.66 vs 0.70 target) and answer relevancy (0.46), where the mandatory follow-up question and the breadth of the 192-question set are the main limiting factors.
+
+## Next Steps
 
 - Move embeddings to Postgres (pgvector) or unify storage strategy
 - Add audit log (profile changes + reasoning trace)

@@ -50,7 +50,7 @@ flowchart TD
 
     subgraph RETRIEVAL [Tax Law Retrieval]
         F -- INFO or WHAT_IF --> L[HyDE: generate hypothetical\nlegal passage for embedding]
-        L --> M[Qdrant vector search · k=5]
+        L --> M[Qdrant vector search · k=10]
         M --> N{Score below threshold\nor freshness requested?}
         N -- Yes + allowed topic --> O[Tavily search\nhasil.gov.my only]
         N -- No --> P[Answer node]
@@ -62,8 +62,7 @@ flowchart TD
     end
 
     subgraph PROFILE [Profile Panel · live sidebar]
-        H --> PF[(User Profile\nPostgreSQL)]
-        PF --> FL{Risk flags?}
+        H --> FL{Risk flags?}
         FL -- NEAR_183 days --> V1[⚠ Likely tax resident warning]
         FL -- Data contradiction --> V2[⚠ Consistency alert]
         J -- No · profile complete --> T[Filing form recommended\nB · BE · M]
@@ -91,85 +90,7 @@ Sample prompts and expected retrieval targets:
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│ BROWSER  Next.js 15 · Tailwind CSS 4 · Vercel AI SDK                                    │
-└────────────────────────────────────────────────────────────────────────────┬─────────────┘
-          │  profile REST (CRUD)                                              │  login/token
-          │                                                          ┌────────▼──────────┐
-          │                                                          │   AWS Cognito     │
-          │                                                          └───────────────────┘
-          ▼  SSE stream
-┌─────────────────────────────────────┐
-│ VERCEL  Next.js API Routes          │
-│  /api/chat  ·  /api/mock            ├──── profile CRUD ────────► PostgreSQL
-└──────────────────┬──────────────────┘                            (user profiles)
-                   │  POST /app/chat
-                   ▼
-┌──────────────────────────────────────────────────────────────────────────────────────────┐
-│ FastAPI + Uvicorn                                                                        │
-│                                                                                          │
-│  ┌────────────────────────────────────────────────────────────────────────────────────┐  │
-│  │ LangGraph StateGraph                                                               │  │
-│  │                                                                                    │  │
-│  │  ┌─────────────────────────────────┐                                               │  │
-│  │  │ 1. CONTROLLER  (no LLM)         ├── load thread ──────────────────► Redis       │  │
-│  │  │    intent_classifier            │   (AsyncRedisSaver)                           │  │
-│  │  │    topic_classifier             │                                               │  │
-│  │  │    freshness_requested          │                                               │  │
-│  │  │    next_question                │                                               │  │
-│  │  │    parse_answer_for_field       │                                               │  │
-│  │  │    presence_calculator          │                                               │  │
-│  │  │    filing_form_selector         │                                               │  │
-│  │  │    consistency_checker          │                                               │  │
-│  │  └──────────────┬──────────────────┘                                               │  │
-│  │                 │◄── emits profile_patch SSE event                                 │  │
-│  │                 │                                                                  │  │
-│  │         retrievalQuery?                                                            │  │
-│  │    yes ─────────┘──────── no ──────────────────────────────-────────────┐          │  │
-│  │    ▼                                                                    │          │  │
-│  │  ┌─────────────────────────────────┐                                    │          │  │
-│  │  │ 2. RETRIEVE                     ├── embed query ────────────-─────► OpenAI API  │  │
-│  │  │    similarity_search_with_score ├── k=5 vector search ──────-─────► Qdrant Cloud│  │
-│  │  │    collection: malaysia-tax-laws│   (scored chunks + section refs)              │  │
-│  │  └──────────────┬──────────────────┘                                    │          │  │
-│  │                 │                                                       │          │  │
-│  │     max_score < 0.25 OR freshness_requested?                            │          │  │
-│  │    yes ─────────┘────── no ─────────────────────────────────────────────┤          │  │
-│  │    ▼  (+ topic in allowed set)                                          │          │  │
-│  │  ┌─────────────────────────────────┐                                    │          │  │
-│  │  │ 3. TAVILY LOOKUP                ├── search (topic-scoped URLs) ──► Tavily API   │  │
-│  │  │    allowlist: hasil.gov.my only │   DTA / Public Rulings /                      │  │
-│  │  │    max 5 results                │   Filing Deadlines pages only                 │  │
-│  │  └──────────────┬──────────────────┘                                    │          │  │
-│  │                 └────────────────────────────────────────────────────-──┘          │  │
-│  │                                    ▼                                               │  │
-│  │  ┌──────────────────────────────────────────────────────────────────────────────┐  │  │
-│  │  │ 4. ANSWER                                                                    │  │  │
-│  │  │    compose context:                                         ┌─────────────┐  │  │  │
-│  │  │      <profile_context>  ·  <decision_map>  ·  <flags>       │ Anthropic   │  │  │  │
-│  │  │      <retrieved_context>  ·  <freshness_addendum>    ──────►│ Claude      │  │  │  │
-│  │  │      <suggested_form>  ·  <next_question>                   │ Haiku 4.5   │  │  │  │
-│  │  │    stream tokens ──► SSE message events                     └─────────────┘  │  │  │
-│  │  └──────────────────────────────────────────────────────────────────────────────┘  │  │
-│  │                                    ▼                                               │  │
-│  │  ┌─────────────────────────────────┐                                               │  │
-│  │  │ 5. CRITIC  (no LLM)             ├── save thread ────────────────-──► Redis      │  │
-│  │  │    regex phrase softening       │   (AsyncRedisSaver)                           │  │
-│  │  │    question-count warning       │                                               │  │
-│  │  └─────────────────────────────────┘                                               │  │
-│  └────────────────────────────────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────────────────────────────┘
-
-                              ── OFFLINE ──
-┌──────────────────────────────────────────────────────────────────────┐
-│  Evaluation  (Jupyter notebooks)                                     │
-│  golden_dataset.json ──► POST /app/chat/eval ──► RAGAS               │
-│  faithfulness · context_precision · context_recall · answer_relevancy│
-│  + deterministic: one_question_compliance · citation_coverage ·      │
-│                   advice_leakage                                     │
-└──────────────────────────────────────────────────────────────────────┘
-```
+![Architecture](architecture.png)
 
 ## Tooling Choices
 
@@ -185,7 +106,7 @@ Sample prompts and expected retrieval targets:
 | User interface | Next.js 15 + Vercel AI SDK | AI SDK's `createUIMessageStream` handles SSE token streaming and `profile_patch` events in one pass |
 | Deployment | Vercel | Zero-config Next.js deploys; `BACKEND_URL` env var routes to the Python backend |
 | Auth | AWS Cognito | Managed JWT issuance for the `Authorization: Bearer` pattern; no login system to build |
-| User profile storage | PostgreSQL | Structured relational data with PATCH semantics and audit timestamps |
+| User profile storage | Frontend state + Redis | Profile JSON is passed on every request; conversation state persisted in Redis via LangGraph checkpointer |
 
 ## RAG Components
 
@@ -208,7 +129,7 @@ Each chunk carries metadata: `reference`, `authority_level`, `doc_type`, `topics
 ### Retrieval → Augmentation → Generation
 
 - **Retrieval:** Multi-query HyDE against `malaysia-tax-laws-v2` (Qdrant, named dense vectors). Two hypothetical legal passages are generated in parallel — one for the primary rule, one for edge cases — embedded with `text-embedding-3-small`, and fused server-side via RRF (`Prefetch×2 → FusionQuery(RRF) → k=10`). If `max_rrf_score < 0.010` and the topic is `DTA_COUNTRY_LIST | PUBLIC_RULING_UPDATE | FILING_DEADLINE_CHANGE`, falls through to Tavily (hasil.gov.my only).
-- **Augmentation:** Retrieved chunks are injected as `<retrieved_context>` alongside `<profile_context>`, `<decision_map>`, `<flags>`, `<freshness_addendum>`, `<suggested_form>`, and `<next_question>` XML blocks. Last 10 conversation messages are appended as history.
+- **Augmentation:** Retrieved chunks are injected as `<retrieved_context>` alongside `<profile_context>`, `<decision_map>`, `<flags>`, `<freshness_addendum>`, `<suggested_form>`, and `<next_question>` XML blocks. Last 20 conversation messages are appended as history (configurable via `LLM_MAX_CONTEXT_MESSAGES`).
 - **Generation:** Single Claude Haiku 4.5 call. Instructed to answer first, cite section numbers, then ask exactly one profiling question verbatim. The deterministic critic node applies regex phrase softening post-generation — no second LLM call.
 
 ## Agent Components
@@ -221,11 +142,11 @@ Each chunk carries metadata: `reference`, `authority_level`, `doc_type`, `topics
 
 **Answer** — single LLM call; streams tokens as SSE `message` events.
 
-**Critic** (deterministic, no LLM) — applies 5 phrase-softening regex rewrites; saves thread checkpoint to Redis.
+**Critic** (deterministic, no LLM) — applies 9 phrase-softening regex rewrites; saves thread checkpoint to Redis.
 
 ## Chunking Strategy
 
-**Settings:** `chunk_size=1200`, `chunk_overlap=250`, `RecursiveCharacterTextSplitter` with separators `["\n\n\n", "\n\n", "\n", ". ", " ", ""]`
+**Settings:** `chunk_size=1200`, `chunk_overlap=400`, `RecursiveCharacterTextSplitter` with separators `["\n\n\n", "\n\n", "\n", ". ", " ", ""]`
 
 ### Why RecursiveCharacterTextSplitter
 

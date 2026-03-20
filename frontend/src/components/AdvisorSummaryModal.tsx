@@ -38,8 +38,10 @@ export function AdvisorSummaryModal({
     if (!open) return;
     setLocalProfile(profile);
     setSummaryText("");
-    setSummaryLoading(true);
 
+    if (!threadId) return;
+
+    setSummaryLoading(true);
     fetch("/api/chat/summary", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

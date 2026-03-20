@@ -491,18 +491,20 @@ function ChatContent({
 
 type ChatMode = "fast" | "private";
 
-const MODE_OPTIONS: { value: ChatMode; label: string; icon: React.ReactNode; description: string }[] = [
+const MODE_OPTIONS: { value: ChatMode; label: string; icon: React.ReactNode; description: string; disabled?: boolean; comingSoon?: boolean }[] = [
   {
     value: "fast",
-    label: "Fast",
+    label: "Standard",
     icon: <ZapIcon className="size-3" />,
-    description: "Anthropic Claude",
+    description: "Cloud-based model",
   },
   {
     value: "private",
-    label: "Private mode",
+    label: "Private",
     icon: <LockIcon className="size-3" />,
     description: "Self-hosted model",
+    disabled: true,
+    comingSoon: true,
   },
 ];
 
@@ -535,16 +537,21 @@ function ModeSelector({
         {MODE_OPTIONS.map((opt) => (
           <DropdownMenuItem
             key={opt.value}
-            onClick={() => onChange(opt.value)}
+            onClick={() => { if (!opt.disabled) onChange(opt.value); }}
+            disabled={opt.disabled}
             className={[
-              "flex items-start gap-2.5 px-3 py-2.5 text-xs cursor-pointer",
+              "flex items-start gap-2.5 px-3 py-2.5 text-xs",
+              opt.disabled ? "cursor-default opacity-50" : "cursor-pointer",
               opt.value === mode ? "text-primary" : "",
             ].join(" ")}
           >
             <span className="mt-0.5 shrink-0">{opt.icon}</span>
             <div>
               <p className="font-medium leading-tight">{opt.label}</p>
-              <p className="text-muted-foreground text-[10px] mt-0.5">{opt.description}</p>
+              {opt.comingSoon
+                ? <p className="text-muted-foreground text-[10px] mt-0.5">coming soon</p>
+                : <p className="text-muted-foreground text-[10px] mt-0.5">{opt.description}</p>
+              }
             </div>
           </DropdownMenuItem>
         ))}

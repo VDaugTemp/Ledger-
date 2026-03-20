@@ -7,6 +7,9 @@ import type { Profile } from "@/lib/types";
 import { CountryCombobox } from "@/components/ui/country-combobox";
 import { generateOpenQuestions, computeCompletenessScore, applyProfilePatch } from "@/lib/openQuestions";
 import { ProfileEditForm } from "@/components/ProfileEditForm";
+import { NextStepAction } from "@/components/NextStepAction";
+import { AdvisorSummaryModal } from "@/components/AdvisorSummaryModal";
+import { downloadAdvisorPdf } from "@/lib/pdf-downloader";
 
 export default function ProfilePage() {
   const { user, accessToken } = useAuth();
@@ -17,6 +20,7 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [advisorModalOpen, setAdvisorModalOpen] = useState(false);
 
   async function patch(p: Partial<Profile>) {
     if (!profile) return;
@@ -129,6 +133,24 @@ export default function ProfilePage() {
           onChange={patch}
         />
       )}
+
+      {/* ── Advisor summary ── */}
+      <NextStepAction onOpen={() => setAdvisorModalOpen(true)} />
+
+      <AdvisorSummaryModal
+        open={advisorModalOpen}
+        onClose={() => setAdvisorModalOpen(false)}
+        profile={profile ?? null}
+        threadId=""
+        onDownload={(profileSnapshot, summaryText) => {
+          downloadAdvisorPdf({
+            profile: profileSnapshot,
+            summaryText,
+            generatedDate: new Date().toISOString().split("T")[0],
+          });
+          setAdvisorModalOpen(false);
+        }}
+      />
     </div>
   );
 }

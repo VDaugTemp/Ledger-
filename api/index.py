@@ -48,6 +48,30 @@ async def _get_redis() -> aioredis.Redis:
 
 _THREAD_TTL_SECONDS = 864_000  # 10 days
 
+# Claude Haiku (claude-haiku-4-5-20251001) pricing
+_HAIKU_INPUT_PRICE_PER_TOKEN = 0.80 / 1_000_000   # USD per input token
+_HAIKU_OUTPUT_PRICE_PER_TOKEN = 4.00 / 1_000_000  # USD per output token
+_USER_BUDGET_USD = 3.00
+
+
+async def _get_user_cost(user_id: str) -> float:
+    """Return total USD cost accumulated for this user."""
+    r = await _get_redis()
+    data = await r.hgetall(f"usage:{user_id}")
+    input_tokens = int(data.get("input_tokens", 0))
+    output_tokens = int(data.get("output_tokens", 0))
+    return (input_tokens * _HAIKU_INPUT_PRICE_PER_TOKEN) + (output_tokens * _HAIKU_OUTPUT_PRICE_PER_TOKEN)
+
+
+async def _add_user_tokens(user_id: str, input_tokens: int, output_tokens: int) -> None:
+    """Atomically increment token counters for a user."""
+    r = await _get_redis()
+    key = f"usage:{user_id}"
+    if input_tokens:
+        await r.hincrby(key, "input_tokens", input_tokens)
+    if output_tokens:
+        await r.hincrby(key, "output_tokens", output_tokens)
+
 
 async def _save_thread_metadata(user_id: str, thread_id: str, first_message: str) -> None:
     """Prepend thread metadata to threads:{user_id} Redis list. Sets TTL on first write."""
@@ -164,6 +188,20 @@ async def get_thread_messages(thread_id: str):
 
 @app.post("/app/chat")
 async def chat(payload: ChatRequest):
+    # Quota check — only enforced for identified users
+    if payload.user_id:
+        current_cost = await _get_user_cost(payload.user_id)
+        if current_cost >= _USER_BUDGET_USD:
+            print(f"[QUOTA] Blocked user_id={payload.user_id!r} — cost ${current_cost:.4f} >= ${_USER_BUDGET_USD}")
+
+            async def _quota_exceeded():
+                yield (
+                    f"event: error\n"
+                    f"data: {json.dumps({'message': 'You have reached your usage limit for this service. Please contact support if you need further assistance.'})}\n\n"
+                )
+
+            return StreamingResponse(_quota_exceeded(), media_type="text/event-stream")
+
     if await is_jailbreak(payload.input):
         print(f"[JAILBREAK] Blocked input from user_id={payload.user_id!r}")
 
@@ -215,10 +253,20 @@ async def chat(payload: ChatRequest):
 
     async def stream():
         text_started = False
+        _session_input_tokens = 0
+        _session_output_tokens = 0
         try:
             async for event in graph.astream_events(initial_state, config=config, version="v2"):
                 etype = event.get("event", "")
                 ename = event.get("name", "")
+
+                # Capture token usage from LLM responses
+                if etype == "on_chat_model_end":
+                    output = event.get("data", {}).get("output")
+                    if output is not None:
+                        usage = getattr(output, "usage_metadata", None) or {}
+                        _session_input_tokens += int(usage.get("input_tokens", 0))
+                        _session_output_tokens += int(usage.get("output_tokens", 0))
 
                 # Profile patch: emit immediately after controller completes
                 if etype == "on_chain_end" and ename == "controller":
@@ -265,6 +313,19 @@ async def chat(payload: ChatRequest):
                 f"event: error\n"
                 f"data: {json.dumps({'message': str(exc)}, default=str)}\n\n"
             )
+        finally:
+            # Persist token usage for this turn regardless of success/failure
+            if payload.user_id and (_session_input_tokens or _session_output_tokens):
+                await _add_user_tokens(payload.user_id, _session_input_tokens, _session_output_tokens)
+                turn_cost = (
+                    _session_input_tokens * _HAIKU_INPUT_PRICE_PER_TOKEN
+                    + _session_output_tokens * _HAIKU_OUTPUT_PRICE_PER_TOKEN
+                )
+                print(
+                    f"[QUOTA] user_id={payload.user_id!r} "
+                    f"turn={_session_input_tokens}in/{_session_output_tokens}out "
+                    f"(${turn_cost:.5f})"
+                )
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
